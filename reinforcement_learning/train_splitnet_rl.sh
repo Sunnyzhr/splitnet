@@ -15,7 +15,8 @@ export VECLIB_MAXIMUM_THREADS=4
 export NUMEXPR_NUM_THREADS=4
 
 # Copy this file to log location for tracking the flags used.
-LOG_LOCATION="output_files/"${TASK}"/"${DATASET}"/imagenet_pretrain_supervised_rl"
+####zhr####LOG_LOCATION="output_files/"${TASK}"/"${DATASET}"/imagenet_pretrain_supervised_rl"
+LOG_LOCATION="output_files/"${TASK}"/"${DATASET}"/splitnet_pretrain_supervised_rl"
 mkdir -p ${LOG_LOCATION}
 cp "$(readlink -f $0)" ${LOG_LOCATION}
 
@@ -30,14 +31,14 @@ python train_splitnet.py \
     --use-linear-clip-decay \
     --task pointnav \
     --log-prefix ${LOG_LOCATION} \
-    --eval-interval 250000 \
-    --num-processes 9 \
+    --eval-interval 25000 \
+    --num-processes 4 \
     --num-forward-rollout-steps 128 \
     --num-mini-batch 1 \
     --dataset ${DATASET} \
     --data-subset train \
-    --pytorch-gpu-ids 0,1,2,3 \
-    --render-gpu-ids 1,2,3 \
+    --pytorch-gpu-ids 0 \
+    --render-gpu-ids 0 \
     --freeze-encoder-features \
     --freeze-visual-decoder-features \
     --no-visual-loss \

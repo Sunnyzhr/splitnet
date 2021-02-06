@@ -22,13 +22,14 @@ python train_splitnet.py \
     --algo supervised \
     --encoder-network-type ShallowVisualEncoder \
     --log-prefix ${LOG_LOCATION} \
-    --eval-interval 250000 \
+    --eval-interval 2500 \
     --lr 2.5e-4 \
     --value-loss-coef 0.5 \
     --dataset ${DATASET} \
     --data-subset train \
-    --num-processes 18 \
+    --num-processes 1 \
     --num-forward-rollout-steps 128 \
     --task pointnav \
-    --pytorch-gpu-ids 3 \
-    --render-gpu-ids 4,5,6 \
+    --pytorch-gpu-ids 0 \
+    --render-gpu-ids 0 \
+    --end-to-end \

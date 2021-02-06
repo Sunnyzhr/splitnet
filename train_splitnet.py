@@ -3,6 +3,26 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 # This source code is licensed under the Creative Commons license found in the
 # LICENSE file in the root directory of this source tree.
+# import sys
+# sys.path.append("/home/u/Desktop/habitat-lab/habitat")
+
+# import habitat_sim
+# path = habitat_sim.ShortestPath()
+# sim_cfg = habitat_sim.SimulatorConfiguration()
+# sim_cfg.scene.id = "/home/u/Desktop/17DRP5sb8fy/Eudora.glb"
+# agent_cfg = habitat_sim.agent.AgentConfiguration()
+# sim = habitat_sim.Simulator(habitat_sim.Configuration(sim_cfg, [agent_cfg])) #zhr : it takes 1 seconds !!!
+ 
+
+import sys
+sys.path.insert(0, './yolov5')
+from yolov5.zhr_detect_3 import hayo
+object_detector = hayo()
+# import cv2
+import os
+os.system('play -nq -t alsa synth 0.05 sine 500')
+
+   
 
 import datetime
 import os
@@ -29,6 +49,11 @@ from utils.storage import RolloutStorageWithMultipleObservations
 
 class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
     def __init__(self, create_decoder=True):
+        self.detect_msg = None # This is from yolov5
+        self.zhr_collision_flag = None
+        self.zhr_get_distance = None
+        self.zhr_prev_action = None
+
         self.rollouts = None
         self.logger = None
         self.train_stats = None
@@ -43,7 +68,7 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
         start_t = time.time()
         config = self.configs[0]
         dataset = make_dataset(config.DATASET.TYPE, config=config.DATASET)
-        observation_shape_chw = (3, config.SIMULATOR.RGB_SENSOR.HEIGHT, config.SIMULATOR.RGB_SENSOR.WIDTH)
+        observation_shape_chw = (3, config.SIMULATOR.RGB_SENSOR.HEIGHT, config.SIMULATOR.RGB_SENSOR.WIDTH) # zhr: [c,h,w]==[3,256,256]
         print("made dataset")
 
         assert len(dataset.episodes) > 0, "empty datasets"
@@ -76,14 +101,26 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
 
         print("Feeding dummy batch")
         dummy_start = time.time()
-        self.optimizer.update(self.rollouts, self.shell_args)
+        
+        # (
+        # zhr_loss_total_epoch,
+        # zhr_value_loss_epoch,
+        # zhr_action_loss_epoch,
+        # zhr_dist_entropy_epoch,
+        # zhr_visual_loss_value,
+        # zhr_visual_losses,
+        # zhr_egomotion_loss_value, 
+        # zhr_feature_prediction_loss_value
+        # )=
+        self.optimizer.update(self.rollouts, self.shell_args) # zhr: key method !!! excute PPO algorithm
+        # self.optimizer.update(self.rollouts, self.shell_args) # zhr: this is the original code
         print("Done feeding dummy batch %.3f" % (time.time() - dummy_start))
 
         self.logger = None
         if self.shell_args.tensorboard:
             self.logger = tensorboard_logger.Logger(
                 os.path.join(self.shell_args.log_prefix, self.shell_args.tensorboard_dirname, self.time_str + "_train")
-            )
+            ) # create folder of tensorboard
 
         self.datasets = {"train": datasets, "val": self.eval_datasets}
 
@@ -101,6 +138,13 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
         )
 
     def train_model(self):
+        zhr_flag_next_zero = False # To set zero some variables at next turn
+        from habitat.utils.visualizations import maps
+        from matplotlib import pyplot as plt
+        from matplotlib import use as matplotlib_use
+        from PIL import Image
+        from matplotlib import patches
+
         episode_rewards = deque(maxlen=10)
         current_episode_rewards = np.zeros(self.shell_args.num_processes)
         episode_lengths = deque(maxlen=10)
@@ -117,6 +161,9 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
         # self.evaluate_model()
 
         obs = self.envs.reset()
+        current_episode_rewards = np.zeros(1) #ZHR
+        current_episode_lengths = np.zeros(1) #ZHR
+
         if self.compute_surface_normals:
             obs["surface_normals"] = pt_util.depth_to_surface_normals(obs["depth"].to(self.device))
         obs["prev_action_one_hot"] = obs["prev_action_one_hot"][:, ACTION_SPACE].to(torch.float32)
@@ -134,8 +181,14 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
         ) // self.shell_args.num_processes
 
         try:
-            for iter_count in range(num_updates):
-                if self.shell_args.tensorboard:
+            zhr_iter_count = 0
+            for iter_count in range(num_updates): # num_updates == 1e8 // 32 == 312500
+                zhr_iter_count += 1
+                self.zhr_collision_flag = False
+                self.zhr_get_distance = 0.0
+                self.zhr_prev_action = -1
+                # if self.shell_args.tensorboard: # ZHR:debug1
+                if False:
                     if iter_count % 500 == 0:
                         print("Logging conv summaries")
                         self.logger.network_conv_summary(self.agent, total_num_steps)
@@ -159,19 +212,35 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                 for step in range(self.shell_args.num_forward_rollout_steps):
                     with torch.no_grad():
                         start_t = time.time()
+                        ### 
+                        tmp1 = 1.0 if self.zhr_collision_flag else 0.0
+                        tmp2 = 1.0 if self.zhr_prev_action == 0 else 0.0
+                        tmp3 = self.zhr_get_distance
+                        # tmp2 = 1.0 if 1 == self.rollouts.additional_observations_dict["prev_action_one_hot"][step][0][0] else 0.0
+
+                        zhr_replace = torch.from_numpy(np.array([[tmp1,tmp2,tmp3]],dtype="int")).to("cuda:0")
+                        ###
                         value, action, action_log_prob, recurrent_hidden_states = self.agent.act(
                             {
                                 "images": self.rollouts.obs[step],
-                                "target_vector": self.rollouts.additional_observations_dict["pointgoal"][step],
-                                "prev_action_one_hot": self.rollouts.additional_observations_dict[
-                                    "prev_action_one_hot"
-                                ][step],
+                                "target_vector": 0.00000000 * self.rollouts.additional_observations_dict["pointgoal"][step],
+                                # "prev_action_one_hot": self.rollouts.additional_observations_dict[
+                                #     "prev_action_one_hot"
+                                # ][step],
+                                "prev_action_one_hot": zhr_replace, #ZHR:debuug
+                                # "zhr_new_input": torch.rand(1, 3).to(self.device), #ZHR:debug2
                             },
                             self.rollouts.recurrent_hidden_states[step],
                             self.rollouts.masks[step],
                         )
+                        self.zhr_prev_action = action
+                        # ### zhr: randomly choose action:
+                        # tmp =  iter_count*self.shell_args.num_forward_rollout_steps + step
+                        # if tmp != 0 and tmp % 20 == 0:
+                        #     action = action*0 + random.randint(0,2)
+
                         action_cpu = pt_util.to_numpy(action.squeeze(1))
-                        translated_action_space = ACTION_SPACE[action_cpu]
+                        translated_action_space = ACTION_SPACE[action_cpu]# zhr: ACTION_SPACE == [SimulatorActions.MOVE_FORWARD,SimulatorActions.TURN_LEFT,SimulatorActions.TURN_RIGHT]
                         if not self.shell_args.end_to_end:
                             self.rollouts.additional_observations_dict["visual_encoder_features"][
                                 self.rollouts.step
@@ -251,7 +320,132 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                         distances = pt_util.to_numpy(obs["goal_geodesic_distance"])
 
                         start_t = time.time()
-                        obs, rewards, dones, infos = self.envs.step(translated_action_space)
+                        obs, rewards, dones, infos = self.envs.step(translated_action_space)# zhr: when getting to the max-episode-length
+                        self.zhr_collision_flag = infos[0]["zhr_collision_flag"]
+                        self.zhr_get_distance = infos[0]["zhr_get_distance"] 
+                        # ## to print out useful infomation
+                        # tmp_cnt = 0
+                        # for tmp in range(len(infos[0]["zhr_shortest_ego_start"])-1):
+                        #     tmp_cnt += np.linalg.norm(infos[0]["zhr_shortest_ego_start"][tmp+1] - infos[0]["zhr_shortest_ego_start"][tmp])
+                        # print(infos[0]["zhr_accumulate_path"],infos[0]["zhr_get_distance"],tmp_cnt)
+                        # print(infos[0]["zhr_prev_position"],infos[0]["zhr_ego_position"])
+                        ### to satisify underlying codes
+                        if infos[0]["zhr_prev_distance"] is None: # for the first time, the api will return None:     info["zhr_prev_distance"] = self._zhr_prev_distance
+                            infos[0]["zhr_prev_distance"] = 0.0
+                        if infos[0]["zhr_get_distance"] is None:
+                            infos[0]["zhr_get_distance"] = 0.0
+                        infos[0]["spl"] = -2.333
+                        if len(dones)!=1:
+                            raise NotImplemented("The length of 'dones' is not 1 !!!")
+                        ### zhr: yolov5
+                        zhr_rgb=np.array(obs["rgb"].squeeze()).transpose(1,2,0)
+                        self.detect_msg = object_detector.forward(obs=zhr_rgb)
+                        success,box,zhr_rgb,conf = self.detect_msg["success"],self.detect_msg["box"],self.detect_msg["zhr_rgb"],self.detect_msg["conf"]
+                        dones = [success]
+                        ### zhr: boudary condition
+                        if zhr_flag_next_zero:
+                            zhr_flag_next_zero = False # To set zero some variables at next turn
+                            self.zhr_get_distance = 0
+                            infos[0]["zhr_get_distance"] = 0
+                            infos[0]["zhr_prev_distance"] = 0
+                            current_episode_rewards = np.zeros(1) 
+                            current_episode_lengths = np.zeros(1)
+                        if infos[0]["zhr_episode_over"]: 
+                            zhr_flag_next_zero = True # To set zero some variables at next turn
+                            print("This step will be skipped")
+                            break # break the rollouts
+
+
+                        success_rate = num_episodes/(1e-5+iter_count)
+                        zhr_validity_index = infos[0]['zhr_get_distance']/(1e-5+infos[0]['zhr_accumulate_path'])
+                        ### zhr: design new rewards
+                        penalty_time = -0.01
+                        reward_success = zhr_validity_index*0.01*self.shell_args.max_episode_length if dones[0] else 0.0
+                        # penalty_rotate = -0.01 if action_cpu[0] == self.zhr_prev_action and action_cpu[0] != 0 else 0.0 #when init: zhr_prev_action == 0
+                        penalty_collision = -0.02 if infos[0]["zhr_collision_flag"] else 0.0
+                        reward_forward = 0.015 if action_cpu[0] == 0 else 0.0
+                        # reward_flee = 1.0*(infos[0]["zhr_get_distance"] - infos[0]["zhr_prev_distance"])
+                        rewards = reward_success + penalty_time  + reward_forward + penalty_collision
+                        rewards = torch.from_numpy(np.array(rewards, dtype='float'))
+                        print(f"Act:{action_cpu[0]}.", f"{success_rate:.3f}Done:{success}.", f"iter:{iter_count+self.start_iter}.",\
+                            f"Epi_id:{infos[0]['episode_id']}. Step:{step}. Acc_R:{current_episode_rewards[0]:.5f}. Cur_R:{rewards:.5f}.",\
+                            f"{zhr_validity_index:.3f}Acc_path{infos[0]['zhr_accumulate_path']:.5f}",\
+                            f'delta_distance:{infos[0]["zhr_get_distance"] - infos[0]["zhr_prev_distance"]:.5f}',\
+                            f"Collision:{self.zhr_collision_flag}")
+
+
+                        # rewards = torch.from_numpy(np.array(-0.01, dtype='float')) # time penalty
+                        # if infos[0]["zhr_prev_distance"] is None: # for the first time, the api will return None:     info["zhr_prev_distance"] = self._zhr_prev_distance
+                        #     infos[0]["zhr_prev_distance"] = 0.0
+                        #     print("infos[0][\"zhr_get_distance\"] is None")
+                        # delta_distance = infos[0]["zhr_get_distance"] - infos[0]["zhr_prev_distance"]
+                        # rewards = rewards + delta_distance # flee stimuli # 4=1/0.25
+                        # if infos[0]["zhr_collision_flag"]:
+                        #     rewards = rewards -0.1
+                        #     print("collision!")
+                        # if success:
+                        #     rewards = torch.from_numpy(np.array(0.05*self.shell_args.max_episode_length))
+                        # print("Action:",action_cpu[0], "Succeed:",success,\
+                        #     f"Step:{step}. AccReward:{current_episode_rewards}. CurReward:{rewards}.",\
+                        #         f"delta_distance:{delta_distance}")
+                        
+                        
+
+
+                        """
+                        zhr:                        
+                        obs['rgb']                          torch.Size([1, 3, 256, 256])
+                        obs['pointgoal']                    tensor([[2.1168, 1.2231]])
+                        obs['heading']                      tensor([0.4476], dtype=torch.float64)
+                        obs['prev_action']                  tensor([2])
+                        obs['prev_action_one_hot']          tensor([[0., 0., 1., 0., 0., 0.]])
+                        obs['goal_geodesic_distance']       tensor([2.6609], dtype=torch.float64)
+                        reward                              tensor([[-0.0100]])
+                        dones                               False
+                        infos[0]["episode_id"]              '37366'
+                        infos[0]["top_down_map"]["map"]                 It has a shape of (65, 50), contents are numbers 0~7
+                        infos[0]["top_down_map"]["agent_map_coord"]     (24, 26)
+                        infos[0]["top_down_map"]["agent_angle"]         -1.123239118675821
+                        """
+                        
+                        # ### zhr: Show the ego information
+                        if False:
+                        # if True:           
+                            matplotlib_use('TkAgg')
+                            tmp=infos[0]["top_down_map"]["map"]
+                            top_down_map = maps.colorize_topdown_map(infos[0]["top_down_map"]["map"])   
+                            zhr_rgb=np.array(obs["rgb"].squeeze()).transpose(1,2,0)
+                            rgb_img = Image.fromarray(zhr_rgb, mode="RGB")
+                            plt.ion()
+                            plt.clf()
+                            ax = plt.subplot(2, 1, 1)
+                            ax.set_title("rgb")
+                            a=infos[0]['zhr_ego_position']
+                            temp=f"current_position:{infos[0]['zhr_ego_position']}. Episode_id:{infos[0]['episode_id']}"
+                            plt.text(-280,-70,temp,fontsize=10)
+                            temp="Action_probs:[{:.3f},{:.3f},{:.3f}]. Choose action:{:d}. critic value:{:.3f}".format(
+                                self.agent.last_dist.probs.cpu().numpy()[0][0],
+                                self.agent.last_dist.probs.cpu().numpy()[0][1],
+                                self.agent.last_dist.probs.cpu().numpy()[0][2],
+                                action.cpu().numpy()[0][0],
+                                value.cpu().numpy()[0][0]
+                                )
+                            plt.text(-280,-40,temp,fontsize=10)
+
+                            
+                            if box is not None:
+                                rect=patches.Rectangle(xy=(int(box[0]),int(box[1])),width=int(box[2])-int(box[0]),height=int(box[3])-int(box[1]),linewidth=2,fill=False,edgecolor='r')
+                                ax.add_patch(rect)
+
+                            plt.imshow(rgb_img)
+                            ax = plt.subplot(2, 1, 2)
+                            # ax.set_title(infos[0]["scene_id"].split('/')[-1])
+                            ax.set_title(infos[0]['episode_id'])
+                            plt.imshow(top_down_map)
+                            plt.show()
+                            plt.pause(0.001)
+                            plt.ioff()
+                        
                         timers[0] += time.time() - start_t
                         obs["reward"] = rewards
                         if self.shell_args.algo == "supervised":
@@ -270,10 +464,11 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
 
                         current_rewards = pt_util.to_numpy(rewards)
                         current_episode_rewards += pt_util.to_numpy(rewards).squeeze()
-                        current_episode_lengths += 1
+                        current_episode_lengths += 1 # zhr: with a maxium of 500
                         for ii, done_e in enumerate(dones):
                             if done_e:
                                 num_episodes += 1
+                                os.system('play -nq -t alsa synth 0.05 sine 500')
                                 if self.shell_args.record_video:
                                     final_rgb = draw_obs["rgb"].transpose(0, 2, 3, 1).squeeze(0)
                                     if self.shell_args.task == "pointnav":
@@ -344,7 +539,8 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                                         )
                                     )
                                     self.train_stats["spl"][ii] = infos[ii]["spl"]
-                                    self.train_stats["success"][ii] = self.train_stats["spl"][ii] > 0
+                                    # self.train_stats["success"][ii] = self.train_stats["spl"][ii] > 0
+                                    self.train_stats["success"][ii] = success #ZHR
                                     self.train_stats["end_geodesic_distance"][ii] = (
                                         distances[ii] - self.configs[0].SIMULATOR.FORWARD_STEP_SIZE
                                     )
@@ -369,7 +565,8 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                                 self.train_stats["num_episodes"][ii] += 1
                                 self.train_stats["reward"][ii] = current_episode_rewards[ii]
 
-                                if self.shell_args.tensorboard:
+                                # if self.shell_args.tensorboard: #ZHR:debug1
+                                if False:
                                     log_dict = {"single_episode/reward": self.train_stats["reward"][ii]}
                                     if self.shell_args.task == "pointnav":
                                         log_dict.update(
@@ -396,9 +593,7 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                                         log_dict["single_episode/distance_from_start"] = self.train_stats[
                                             "distance_from_start"
                                         ][ii]
-                                    self.logger.dict_log(
-                                        log_dict, step=(total_num_steps + self.shell_args.num_processes * step + ii)
-                                    )
+                                    # self.logger.dict_log(log_dict, step=(total_num_steps + self.shell_args.num_processes * step + ii)) #ZHR:debug1
 
                                 episode_rewards.append(current_episode_rewards[ii])
                                 current_episode_rewards[ii] = 0
@@ -414,8 +609,28 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
 
                         self.rollouts.insert(
                             obs, recurrent_hidden_states, action, action_log_prob, value, rewards, masks, bad_masks
-                        )
-
+                        )# the rewards will then be used to update weights      
+                        #def insert(self, obs, ...):  self.obs[self.step + 1].copy_(obs) ... self.rewards[self.step].copy_(rewards) ...
+                    
+                    
+                    ### zhr: boundary condition -> otherwise, the agent will not stop until the last step of rollout is successful
+                    if dones[0]:
+                        zhr_flag_next_zero = True 
+                        # zhr_rgb=np.array(obs["rgb"].squeeze()).transpose(1,2,0)
+                        # rgb_img = Image.fromarray(zhr_rgb, mode="RGB")
+                        # rgb_img.save(f"/home/u/Desktop/splitnet/zhr/training_success/{self.start_iter}_{iter_count}_{conf}.png")
+                        break # wait to update weights
+                if infos[0]["zhr_episode_over"]: #to restart the rollout step to 0
+                    print("This step is now skipped")
+                    zhr_iter_count -= 1
+                    continue # continue iter, and not update this step
+                                
+                """
+                self.rollouts.obs.shape                     torch.Size([9, 1, 3, 256, 256])
+                self.rollouts.rewards.shape                 torch.Size([8, 1, 1])
+                self.rollouts.value_preds.shape             torch.Size([9, 1, 1])
+                self.rollouts.recurrent_hidden_states.shape torch.Size([9, 1, 256])
+                """
                 with torch.no_grad():
                     start_t = time.time()
                     next_value = self.agent.get_value(
@@ -425,6 +640,7 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                             "prev_action_one_hot": self.rollouts.additional_observations_dict["prev_action_one_hot"][
                                 -1
                             ],
+                            # "zhr_new_input": torch.rand(1, 3).to(self.device), #ZHR:debug2
                         },
                         self.rollouts.recurrent_hidden_states[-1],
                         self.rollouts.masks[-1],
@@ -433,7 +649,7 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
 
                 self.rollouts.compute_returns(
                     next_value, self.shell_args.use_gae, self.shell_args.gamma, self.shell_args.tau
-                )
+                )# tensor([[-0.17840]], device='cuda:0'), True, 0.99, 0.95
 
                 if not self.shell_args.no_weight_update:
                     start_t = time.time()
@@ -456,19 +672,30 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                             visual_loss_dict,
                             egomotion_loss,
                             forward_model_loss,
-                        ) = self.optimizer.update(self.rollouts, self.shell_args)
-
+                        ) = self.optimizer.update(self.rollouts, self.shell_args) # zhr: key method!!! execute PPO algorithm
+                        print("Now update weights, executing 'self.optimizer.update(self.rollouts, self.shell_args)'")
                     timers[2] += time.time() - start_t
+                zhr_log_dict = {}
+                zhr_log_dict.update({
+                    "zhr/rewards": rewards,
+                    "zhr/step": step,
+                    "zhr/validity": zhr_validity_index,
+                    "zhr/dist_entropy": dist_entropy
+                    })
+                self.logger.dict_log(zhr_log_dict, step=zhr_iter_count)
 
-                self.rollouts.after_update()
+
+                self.rollouts.after_update() # zhr:?? 129 dimensions. Replace var[0] with var[-1]
 
                 # save for every interval-th episode or for the last epoch
                 if iter_count % self.shell_args.save_interval == 0 or iter_count == num_updates - 1:
-                    self.save_checkpoint(5, total_num_steps)
+                    if iter_count != 0: # zhr: do not save for the first episode
+                        self.save_checkpoint(5, total_num_steps)
 
                 total_num_steps += self.shell_args.num_processes * self.shell_args.num_forward_rollout_steps
 
                 if not self.shell_args.no_weight_update and iter_count % self.shell_args.log_interval == 0:
+                    # "--log-interval" default 10 
                     log_dict = {}
                     if len(episode_rewards) > 1:
                         end = time.time()
@@ -497,7 +724,8 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                             )
                         )
 
-                        if self.shell_args.tensorboard:
+                        # if self.shell_args.tensorboard:#ZHR:debug1
+                        if False:
                             log_dict.update(
                                 {
                                     "stats/full_spf": 1.0 / (fps + 1e-10),
@@ -507,7 +735,7 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                                     "stats/full_fps": fps,
                                     "stats/env_fps": 1.0 / (env_spf + 1e-10),
                                     "stats/forward_fps": 1.0 / (forward_spf + 1e-10),
-                                    "stats/backward_fps": 1.0 / (backward_spf + 1e-10),
+                                    "stats/ ": 1.0 / (backward_spf + 1e-10),
                                     "episode/mean_rewards": np.mean(episode_rewards),
                                     "episode/median_rewards": np.median(episode_rewards),
                                     "episode/min_rewards": np.min(episode_rewards),
@@ -521,7 +749,8 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                         fps_timer[0] = time.time()
                         fps_timer[1] = total_num_steps
                         timers[:] = 0
-                    if self.shell_args.tensorboard:
+                    # if self.shell_args.tensorboard:#ZHR:debug1
+                    if False:
                         log_dict.update(
                             {
                                 "loss/action": action_loss,
@@ -535,19 +764,38 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                             log_dict.update({"loss/entropy": dist_entropy, "loss/value": value_loss})
                         for key, val in visual_loss_dict.items():
                             log_dict["loss/visual/" + key] = val
-                        self.logger.dict_log(log_dict, step=total_num_steps)
+                        # self.logger.dict_log(log_dict, step=total_num_steps)#ZHR:debug1
 
+                # save checkpoint when eval
                 if self.shell_args.eval_interval is not None and total_num_steps % self.shell_args.eval_interval < (
-                    self.shell_args.num_processes * self.shell_args.num_forward_rollout_steps
+                    self.shell_args.num_processes * self.shell_args.num_forward_rollout_steps 
                 ):
+                    # self.shell_args.eval_interval == 2500
+                    # total_num_steps == 32
+                    # self.shell_args.eval_interval == 2500
+                    # self.shell_args.num_processes == 1
+                    # self.shell_args.num_forward_rollout_steps == 8
                     self.save_checkpoint(-1, total_num_steps)
                     self.set_log_iter(total_num_steps)
-                    self.evaluate_model()
+                    
+                    self.evaluate_model() # zhr:
+                        # zhr:??Traceback (most recent call last):
+                        #   File "/home/u/Desktop/splitnet/train_splitnet.py", line 618, in train_model
+                        #     self.evaluate_model()
+                        #   File "/home/u/Desktop/splitnet/eval_splitnet.py", line 97, in evaluate_model
+                        #     if not os.path.exists(self.eval_dir):
+                        #   File "/home/u/anaconda3/envs/habitat-yolo/lib/python3.6/genericpath.py", line 19, in exists
+                        #     os.stat(path)
+                        # TypeError: stat: path should be string, bytes, os.PathLike or integer, not NoneType
+                        # Saved /home/u/Desktop/splitnet/output_files/pointnav/gibson/splitnet_pretrain_supervised_rl/checkpoints/2021_01_21_15_31_49/000002528.pt
                     # reset the env datasets
                     self.envs.unwrapped.call(
                         ["switch_dataset"] * self.shell_args.num_processes, [("train",)] * self.shell_args.num_processes
                     )
                     obs = self.envs.reset()
+                    current_episode_rewards = np.zeros(1) #ZHR
+                    current_episode_lengths = np.zeros(1) #ZHR
+                    
                     if self.compute_surface_normals:
                         obs["surface_normals"] = pt_util.depth_to_surface_normals(obs["depth"].to(self.device))
                     obs["prev_action_one_hot"] = obs["prev_action_one_hot"][:, ACTION_SPACE].to(torch.float32)
@@ -560,6 +808,10 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                     egomotion_pred = None
                     prev_action = None
                     prev_action_probs = None
+                if dones[0]: #ZHR boundary condition
+                    self.envs.reset()
+                    current_episode_rewards = np.zeros(1)
+                    current_episode_lengths = np.zeros(1)
         except:
             # Catch all exceptions so a final save can be performed
             import traceback

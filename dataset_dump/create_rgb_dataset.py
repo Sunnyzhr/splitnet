@@ -89,7 +89,7 @@ class RandomImageGenerator(object):
 
         config.freeze()
         self.env = habitat.Env(config=config, dataset=dataset)
-        random.shuffle(self.env.episodes)
+        random.shuffle(self.env.episodes) # zhr: random
         self.num_samples = 0
 
     def get_sample(self) -> Dict[str, np.ndarray]:

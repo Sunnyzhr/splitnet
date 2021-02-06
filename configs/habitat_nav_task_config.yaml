@@ -9,7 +9,7 @@ TASK:
 SIMULATOR:
   SCENE: data/scene_datasets/mp3d/17DRP5sb8fy/17DRP5sb8fy.glb
   FORWARD_STEP_SIZE: 0.25
-  TURN_ANGLE: 10
+  TURN_ANGLE: 30
   AGENT_0:
     ANGULAR_ACCELERATION: 15.7
     ANGULAR_FRICTION: 1.0
@@ -21,16 +21,16 @@ SIMULATOR:
     POSITION: [0, 1.09, 0]
     HEIGHT: 256
     WIDTH: 256
-    HFOV: 45
+    HFOV: 60
     TYPE: HabitatSimRGBSensor
   DEPTH_SENSOR:
-    HFOV: 45
+    HFOV: 60
     MIN_DEPTH: 0
     MAX_DEPTH: 10
     NORMALIZE_DEPTH: True
     TYPE: HabitatSimDepthSensor
   SEMANTIC_SENSOR:
-    HFOV: 45
+    HFOV: 60
     TYPE: HabitatSimSemanticSensor
 DATASET:
   TYPE: PointNav-v1

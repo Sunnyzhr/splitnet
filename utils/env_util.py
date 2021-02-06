@@ -30,7 +30,12 @@ class HabitatVecEnvWrapper(VecEnvWrapper):
     def step_wait(self):
         results = self.venv.wait_step()
         observations, rewards, dones, infos = zip(*results)
+        # # z = self.detect_msg
+        # zhr_reward = tuple([-0.01])
+        # rewards = zhr_reward
+
         return self.package_data(observations), list(rewards), list(dones), list(infos)
+
 
     @property
     def unwrapped(self):
@@ -68,3 +73,6 @@ class VecPyTorch(VecEnvWrapper):
         obs = self.convert_obs(obs)
         reward = torch.tensor(reward).unsqueeze(dim=1).float()
         return obs, reward, done, info
+
+
+

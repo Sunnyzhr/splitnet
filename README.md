@@ -101,7 +101,7 @@ This can be useful for visually examining the learned policies and debugging mis
 
 1. Modify parameters in `generate_videos.sh` and run it.
 1. Play back the generated videos.
-1. ???
+1. 
 1. Profit.
 
 ## License

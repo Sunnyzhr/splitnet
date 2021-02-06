@@ -40,11 +40,24 @@ SIM_ACTION_TO_NAME = {
 
 def make_task_envs(env_types, nav_configs, nav_datasets, shell_args):
     data_keys = list(nav_datasets.keys())
-    nav_datasets = [{key: nav_datasets[key][ii] for key in data_keys} for ii in range(len(nav_datasets[data_keys[0]]))]
+    """
+    Modifed the nav_datasets.
+    """
+    if shell_args.data_subset == "train": # data_keys[0] == "train"
+        nav_datasets = [{'train': nav_datasets['train'][ii]} for ii in range(len(nav_datasets[data_keys[0]]))]
+    elif shell_args.data_subset == "val":
+        # data_keys == ['train', 'val']
+        # nav_datasets == {'train': [<habitat.datasets.pointnav.pointnav_dataset.PointNavDatasetV1 object at 0x7f13dc3872b0>], 'val': None}
+        nav_datasets = [{key: nav_datasets[key][ii] for key in data_keys} for ii in range(len(nav_datasets[data_keys[0]]))]
+    else:
+        print("ZHR: this is not the original train process or val process.")
+        nav_datasets = [{'train': nav_datasets['train'][ii]} for ii in range(len(nav_datasets[data_keys[0]]))]
+    
     env_fn_args: Tuple[Tuple] = tuple(
         zip(env_types, nav_configs, nav_datasets, range(shell_args.seed, shell_args.seed + len(nav_configs)))
     )
-
+    # print(env_types[0]._episode_success(env_types[0]))
+    # print(env_types[0],dir(env_types[0]))
     if shell_args.use_multithreading:
         envs = habitat.ThreadedVectorEnv(make_env_fn, env_fn_args)
     else:
@@ -89,11 +102,19 @@ class BaseHabitatRLRunner(object):
     def restore(self):
         if self.shell_args.load_model:
             self.start_iter = pt_util.restore_from_folder(
-                self.agent,
-                os.path.join(self.shell_args.log_prefix, self.shell_args.checkpoint_dirname, "*"),
-                self.shell_args.saved_variable_prefix,
-                self.shell_args.new_variable_prefix,
-            )
+                self.agent, # VisualPolicy(.....)
+                os.path.join(self.shell_args.log_prefix, self.shell_args.checkpoint_dirname,"*"),
+                # '/home/u/Desktop/splitnet/output_files/pointnav/gibson/splitnet_pretrain_supervised_rl/checkpoints/*'
+                self.shell_args.saved_variable_prefix, # ''
+                self.shell_args.new_variable_prefix, # ''
+            )# zhr: start with zhr_weights
+
+            # self.start_iter = pt_util.restore_from_folder(
+            #     self.agent,
+            #     os.path.join(self.shell_args.log_prefix, self.shell_args.checkpoint_dirname, "*"),
+            #     self.shell_args.saved_variable_prefix,
+            #     self.shell_args.new_variable_prefix,
+            # )
         else:
             print("Randomly initializing parameters")
             pt_util.reset_module(self.agent)
@@ -107,7 +128,7 @@ class BaseHabitatRLRunner(object):
         render_gpus = [int(gpu_id.strip()) for gpu_id in self.shell_args.render_gpu_ids.split(",")]
         self.configs = []
         self.env_types = []
-        for proc in range(self.shell_args.num_processes):
+        for proc in range(self.shell_args.num_processes): 
             extra_task_sensors = set()
 
             extra_agent_sensors = set()
@@ -120,7 +141,9 @@ class BaseHabitatRLRunner(object):
             if self.shell_args.dataset == "mp3d":
                 data_path = "data/datasets/pointnav/mp3d/v1/{split}/{split}.json.gz"
             elif self.shell_args.dataset == "gibson":
-                data_path = "data/datasets/pointnav/gibson/v1/{split}/{split}.json.gz"
+                # data_path = "data/datasets/pointnav/gibson/v1/{split}/{split}.json.gz"
+                data_path = "data/datasets/pointnav/gibson/v1/{split}/zhr.json.gz"
+# Attention: both eval_.. and base_.. have data_path configuration!!!!!!!!!!
             else:
                 raise NotImplementedError("No rule for this dataset.")
 
@@ -131,7 +154,7 @@ class BaseHabitatRLRunner(object):
                 render_gpus[proc % len(render_gpus)],
                 list(extra_task_sensors),
                 list(extra_agent_sensors),
-            )
+            )# zhr: habitat_nav_task_config.yaml is contained in config
             config.TASK.NUM_EPISODES_BEFORE_JUMP = self.shell_args.num_processes
 
             if self.shell_args.blind and not self.shell_args.record_video:
@@ -140,10 +163,10 @@ class BaseHabitatRLRunner(object):
             if self.shell_args.task == "pointnav":
                 config.TASK.SUCCESS_REWARD = 2
                 config.TASK.SUCCESS_DISTANCE = 0.2
-                config.TASK.COLLISION_REWARD = 0
+                config.TASK.COLLISION_REWARD = -0.1 #ZHR
                 config.TASK.ENABLE_STOP_ACTION = False
                 if self.shell_args.task == "pointnav":
-                    self.env_types.append(PointnavRLEnv)
+                    self.env_types.append(PointnavRLEnv)# zhr: PointnavRLEnv is the key class
             elif self.shell_args.task == "exploration":
                 config.TASK.GRID_SIZE = 1
                 assert config.TASK.GRID_SIZE >= config.SIMULATOR.FORWARD_STEP_SIZE
@@ -180,10 +203,10 @@ class BaseHabitatRLRunner(object):
         if self.shell_args.blind:
             decoder_output_info = []
         else:
-            decoder_output_info = [("reconstruction", 3), ("depth", 1), ("surface_normals", 3)]
+            decoder_output_info = [("reconstruction", 3), ("depth", 1), ("surface_normals", 3)] # zhr: auxiliary visual task
 
         if self.shell_args.encoder_network_type == "ShallowVisualEncoder":
-            encoder_type = networks.ShallowVisualEncoder
+            encoder_type = networks.ShallowVisualEncoder# zhr: CNN 
         elif self.shell_args.encoder_network_type == "ResNetEncoder":
             encoder_type = networks.ResNetEncoder
         else:
@@ -192,25 +215,35 @@ class BaseHabitatRLRunner(object):
         self.gym_action_space = gym.spaces.discrete.Discrete(len(ACTION_SPACE))
         target_vector_size = None
         if self.shell_args.task == "pointnav":
-            target_vector_size = 2
+            # target_vector_size = 2
+            target_vector_size = 0 #ZHR:debug0
         elif self.shell_args.task == "exploration" or self.shell_args.task == "flee":
             target_vector_size = 0
-        self.agent = VisualPolicy(
-            self.gym_action_space,
-            base=networks.RLBaseWithVisualEncoder,
+        self.agent = VisualPolicy( # zhr: Key class
+            self.gym_action_space, #<class 'gym.spaces.discrete.Discrete'> such as Discrete(3).
+            base=networks.RLBaseWithVisualEncoder, # zhr: Key class
             base_kwargs=dict(
-                encoder_type=encoder_type,
-                decoder_output_info=decoder_output_info,
+                encoder_type=encoder_type,# zhr: CNN, that is, ShallowVisualEncoder
+                decoder_output_info=decoder_output_info,# zhr: auxiliary visual task [("reconstruction", 3), ("depth", 1), ("surface_normals", 3)]
                 recurrent=True,
                 end_to_end=self.shell_args.end_to_end,
                 hidden_size=256,
-                target_vector_size=target_vector_size,
+                target_vector_size=target_vector_size,# zhr: 2
                 action_size=len(ACTION_SPACE),
                 gpu_ids=self.torch_devices,
-                create_decoder=create_decoder,
+                create_decoder=create_decoder,# zhr: True
                 blind=self.shell_args.blind,
-            ),
+            ),# zhr: construct network
         )
+
+        # self.agent.agent_config = self.configs[0]["SIMULATOR"]["AGENT_0"]
+
+# zhr: networks.RLBaseWithVisualEncoder.__init__()
+#       define the layers of (GRU, ShallowVisualEncoder, visual_projection, ego_motion, motion_model, critic)
+# zhr: networks.RLBaseWithVisualEncoder.forward()
+#       image->encoder->[rollouts,128,8,8]->projection->[rollouts,256]->cat target,motion->[rollouts,261]->rl_layer->[rollouts,256]
+#       ->critic[rollouts,1]     x[rollouts,256]     rnn_hxs[1,256]
+
 
         if self.shell_args.debug:
             print("actor critic", self.agent)
@@ -230,7 +263,7 @@ class BaseHabitatRLRunner(object):
             if hasattr(visual_layers, "decoder"):
                 for param in visual_layers.decoder.parameters():
                     param.requires_grad = False
-            if hasattr(visual_layers, "out"):
+            if hasattr(visual_layers, "out"): 
                 for param in visual_layers.out.parameters():
                     param.requires_grad = False
             if hasattr(visual_layers, "class_pred_layer"):
@@ -259,7 +292,7 @@ class BaseHabitatRLRunner(object):
                 param.requires_grad = False
 
         if self.shell_args.algo == "ppo":
-            self.optimizer = optimizers.VisualPPO(
+            self.optimizer = optimizers.VisualPPO( # zhr: key class
                 self.agent,
                 self.shell_args.clip_param,
                 self.shell_args.ppo_epoch,
@@ -286,7 +319,9 @@ class BaseHabitatRLRunner(object):
 
         height = self.configs[0].SIMULATOR.RGB_SENSOR.HEIGHT
         width = self.configs[0].SIMULATOR.RGB_SENSOR.WIDTH
+        #ZHR:debug3
         self.observation_space = {
+            # "zhr_new_input": ((3,), np.dtype(np.float32)),
             "pointgoal": ((2,), np.dtype(np.float32)),
             "prev_action_one_hot": ((len(ACTION_SPACE),), np.dtype(np.float32)),
             "prev_action": ((1,), np.dtype(np.int64)),
@@ -308,7 +343,13 @@ class BaseHabitatRLRunner(object):
         print("Feeding dummy batch")
         dummy_start = time.time()
 
-        self.agent.act(
+        # zhr_tmp1 = torch.rand(self.shell_args.num_processes, self.agent.recurrent_hidden_state_size)
+        # zhr_tmp2 = torch.rand(self.shell_args.num_processes, 1)
+        # zhr_tmp1 = zhr_tmp1.to(self.device)
+        # zhr_tmp2 = zhr_tmp2.to(self.device)
+        # # https://stackoverflow.com/questions/61149598/pytorchs-input-type-torch-floattensor-and-weight-type-torch-cuda-floattensor
+        zhr_value, zhr_action, zhr_action_log_probs, zhr_rnn_hxs=self.agent.act(
+        # self.agent.act( # zhr: this is the original
             {
                 "images": torch.rand(
                     (
@@ -322,9 +363,12 @@ class BaseHabitatRLRunner(object):
                 "prev_action_one_hot": torch.rand(self.shell_args.num_processes, self.gym_action_space.n).to(
                     self.device
                 ),
+                # "zhr_new_input": torch.rand(self.shell_args.num_processes, 3).to(self.device), #ZHR:debug2
             },
             torch.rand(self.shell_args.num_processes, self.agent.recurrent_hidden_state_size).to(self.device),
             torch.rand(self.shell_args.num_processes, 1).to(self.device),
+            # zhr_tmp1,
+            # zhr_tmp2,
         )
         print("Done feeding dummy batch %.3f" % (time.time() - dummy_start))
         self.start_iter = 0

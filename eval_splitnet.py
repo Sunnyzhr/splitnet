@@ -3,6 +3,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 # This source code is licensed under the Creative Commons license found in the
 # LICENSE file in the root directory of this source tree.
+import json
 
 import datetime
 import glob
@@ -37,13 +38,16 @@ def get_eval_dataset(shell_args, data_subset="val"):
     if shell_args.dataset == "mp3d":
         data_path = "data/datasets/pointnav/mp3d/v1/{split}/{split}.json.gz"
     elif shell_args.dataset == "gibson":
-        data_path = "data/datasets/pointnav/gibson/v1/{split}/{split}.json.gz"
+        # data_path = "data/datasets/pointnav/gibson/v1/{split}/{split}.json.gz"
+        data_path = "data/datasets/pointnav/gibson/v1/{split}/zhr.json.gz"
+# Attention: both eval_.. and base_.. have data_path configuration!!!!!!!!!!!!!
     else:
         raise NotImplementedError("No rule for this dataset.")
-
     config = get_dataset_config(data_path, data_subset, shell_args.max_episode_length, 0, [], [])
-    dataset = make_dataset(config.DATASET.TYPE, config=config.DATASET)
+    
+    data_subset = shell_args.data_subset # zhr: Otherwise, the data_subset is the default "val"
 
+    dataset = make_dataset(config.DATASET.TYPE, config=config.DATASET)
     assert len(dataset.episodes) > 0, "empty datasets"
     return dataset
 
@@ -61,22 +65,25 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
 
     def setup(self, create_decoder):
         super(HabitatRLEvalRunner, self).setup(create_decoder)
-        eval_dataset = get_eval_dataset(self.shell_args)
-        if self.shell_args.record_video:
-            random.shuffle(eval_dataset.episodes)
-        self.num_eval_episodes_total = len(eval_dataset.episodes)
-        self.eval_datasets = eval_dataset.get_splits(self.shell_args.num_processes, allow_uneven_splits=True)
-        self.eval_logger = None
-        if self.shell_args.tensorboard and self.shell_args.eval_interval is not None:
-            self.eval_logger = tensorboard_logger.Logger(
-                os.path.join(self.shell_args.log_prefix, self.shell_args.tensorboard_dirname, self.time_str + "_test")
-            )
-        self.datasets = {"val": self.eval_datasets}
+        # if self.shell_args.data_subset != "train": 
+        if True:
+        # zhr: when traing, do not make eval dataset
+            eval_dataset = get_eval_dataset(self.shell_args)
+            if self.shell_args.record_video:
+                random.shuffle(eval_dataset.episodes)
+            self.num_eval_episodes_total = len(eval_dataset.episodes)
+            self.eval_datasets = eval_dataset.get_splits(self.shell_args.num_processes, allow_uneven_splits=True)
+            self.eval_logger = None
+            if self.shell_args.tensorboard and self.shell_args.eval_interval is not None:
+                self.eval_logger = tensorboard_logger.Logger(
+                    os.path.join(self.shell_args.log_prefix, self.shell_args.tensorboard_dirname, self.time_str + "_test")
+                )
+            self.datasets = {"val": self.eval_datasets}
 
-        self.eval_dir = os.path.join(
-            self.shell_args.log_prefix, self.shell_args.results_dirname, self.shell_args.data_subset
-        )
-        self.set_log_iter(self.start_iter)
+            self.eval_dir = os.path.join(
+                self.shell_args.log_prefix, self.shell_args.results_dirname, self.shell_args.data_subset
+            )
+            self.set_log_iter(self.start_iter)
 
     def set_log_iter(self, iteration):
         self.log_iter = iteration
@@ -84,9 +91,14 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
             self.eval_logger.count = iteration
 
     def evaluate_model(self):
+        # comment this codes?
         self.envs.unwrapped.call(
             ["switch_dataset"] * self.shell_args.num_processes, [("val",)] * self.shell_args.num_processes
         )
+        
+        # zhr: in order to be compatible
+        self.eval_dir = os.path.join(self.shell_args.log_prefix, self.shell_args.results_dirname, self.shell_args.data_subset)
+        self.set_log_iter(self.start_iter)
 
         if not os.path.exists(self.eval_dir):
             os.makedirs(self.eval_dir)
@@ -277,6 +289,41 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
 
                 start_t = time.time()
                 obs, rewards, dones, infos = self.envs.step(translated_action_space)
+
+
+                # # zhr # Show the ego information
+                # tmp=infos[0]["top_down_map"]["map"]
+                # top_down_map = maps.colorize_topdown_map(infos[0]["top_down_map"]["map"])
+                # with open("/home/u/Desktop/splitnet/zhr_global.json","r") as f:
+                #     zhr_global=json.load(f)
+                #     # print("current_position",zhr_global["current_position"])
+                #     # print("target_position",zhr_global["target_position"])
+                # from matplotlib import pyplot as plt
+                # from PIL import Image
+                # zhr_rgb=np.array(obs["rgb"].squeeze()).transpose(1,2,0)
+                # rgb_img = Image.fromarray(zhr_rgb, mode="RGB")
+                # depth_img = Image.fromarray(((obs["depth"].squeeze().numpy()+1)*50).astype(np.uint8), mode="L")
+                # plt.ion()
+                # plt.clf()
+                # ax = plt.subplot(2, 2, 1)
+                # ax.set_title("rgb")
+                # temp=f"current_position:{zhr_global['current_position']}"
+                # plt.text(-70,-70,temp,fontsize=10)
+                # temp=f"target_position:{zhr_global['target_position']}"
+                # plt.text(-70,-100,temp,fontsize=10)
+                # temp=f"delta_x:{zhr_global['target_position'][0]-zhr_global['current_position'][0]}, delta_z:{zhr_global['target_position'][2]-zhr_global['current_position'][2]}"
+                # plt.text(-70,-40,temp,fontsize=10)
+                # plt.imshow(rgb_img)
+                # ax = plt.subplot(2, 2, 2)
+                # ax.set_title("depth")
+                # plt.imshow(depth_img)
+                # ax = plt.subplot(2, 2, 3)
+                # ax.set_title("maps")
+                # plt.imshow(top_down_map)
+                # plt.show()
+                # plt.pause(0.001)
+                # plt.ioff()
+
                 timers[0] += time.time() - start_t
                 obs["prev_action_one_hot"] = obs["prev_action_one_hot"][:, ACTION_SPACE].to(torch.float32)
                 rewards *= REWARD_SCALAR
@@ -325,6 +372,11 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
                                     infos[ii]["spl"],
                                 )
                             )
+                            # zhr
+                            print('obs["goal_geodesic_distance"]',obs["goal_geodesic_distance"])
+                            print("dones",dones)
+
+
                             eval_stats["spl"][ii] = infos[ii]["spl"]
                             eval_stats["success"][ii] = eval_stats["spl"][ii] > 0
                             eval_stats["num_steps"][ii] = current_episode_lengths[ii]

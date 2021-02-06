@@ -3,6 +3,12 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
 # This source code is licensed under the Creative Commons license found in the
 # LICENSE file in the root directory of this source tree.
+import sys
+sys.path
+sys.path.append(r'/home/u/Desktop/splitnet')
+print("zhr")
+print(sys.path[-1])
+
 
 import os
 import random

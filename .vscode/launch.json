@@ -1,0 +1,80 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            // "cwd": "${/home/u/Desktop/splitnet}",
+            "console": "integratedTerminal",
+            "env":{
+                "GLOG_minloglevel":"2",
+                "OMP_NUM_THREADS":"4",
+                "OPENBLAS_NUM_THREADS":"4",
+                "MKL_NUM_THREADS":"4",
+                "VECLIB_MAXIMUM_THREADS":"4",
+                "NUMEXPR_NUM_THREADS":"4",
+            },
+            // // // eval
+            // "args":[
+            //     "--log-prefix","/home/u/Desktop/splitnet/output_files/pointnav/gibson/splitnet_pretrain_supervised_rl", 
+            //     "--dataset","gibson",
+            //     "--task","pointnav", 
+            //     "--encoder-network-type","ShallowVisualEncoder", 
+            //     "--num-processes","1", 
+            //     "--data-subset","val", 
+            //     "--no-save-checkpoints", 
+            //     "--no-weight-update", 
+            //     "--no-tensorboard", 
+            //     "--pytorch-gpu-ids","0", 
+            //     "--render-gpu-ids","0",
+            //     "--eval-interval","10",          
+            //     "--max-episode-length","500",   
+            // ],
+
+            // // train
+            "args": [
+                "--use-gae",
+                "--clip-param","0.1",
+                "--value-loss-coef","0.5",
+                "--entropy-coef","0.01",
+                "--use-linear-clip-decay",
+                "--task","pointnav",
+                "--log-prefix","/home/u/Desktop/splitnet/output_files/pointnav/gibson/splitnet_pretrain_supervised_rl",
+                "--num-processes","1",
+                "--num-mini-batch","1",
+                "--dataset","gibson",
+                "--data-subset","train",
+                "--pytorch-gpu-ids","0",
+                "--render-gpu-ids","0", 
+                "--freeze-encoder-features",
+                "--freeze-visual-decoder-features",
+                "--no-visual-loss",
+                "--freeze-motion-decoder-features",
+                "--no-motion-loss",
+                "--algo","ppo",
+                // "--encoder-network-type","ShallowVisualEncoder",
+                // "--debug",
+                // "--num-train-scenes","1",
+                // "--no-cuda",
+                // "--eval-interval","2500",
+                // "--no-tensorboard",
+                // "--algo","supervised",
+                // "--num-forward-rollout-steps","128",
+                // "--lr","2.5e-4",
+                "--save-interval","100", // amounts of rollouts
+                "--num-env-steps","300000000",
+                "--num-forward-rollout-steps","128",
+                "--max-episode-length","129",
+                "--lr","2.5e-4",
+                "--encoder-network-type","ResNetEncoder",
+            ],
+        }
+    ]
+}
+

@@ -4,7 +4,7 @@
 # This source code is licensed under the Creative Commons license found in the
 # LICENSE file in the root directory of this source tree.
 
-DATASET="mp3d"
+DATASET="gibson"
 TASK="pointnav"
 
 export GLOG_minloglevel=2
@@ -23,7 +23,7 @@ python eval_splitnet.py \
     --dataset ${DATASET} \
     --task ${TASK} \
     --encoder-network-type ShallowVisualEncoder \
-    --num-processes 4 \
+    --num-processes 1 \
     --data-subset val \
     --no-save-checkpoints \
     --no-weight-update \

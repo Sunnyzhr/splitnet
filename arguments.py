@@ -78,9 +78,9 @@ def get_args():
         "--clear-weights", action="store_true", default=False, help="do not load previous model weights if they exist"
     )
 
-    parser.add_argument(
-        "--dataset-dir", type=str, default="data/datasets/pointnav/habitat_test_scenes/v1/train", help="path to dataset"
-    )
+    # parser.add_argument(
+    #     "--dataset-dir", type=str, default="data/datasets/pointnav/habitat_test_scenes/v1/train", help="path to dataset"
+    # )
 
     parser.add_argument(
         "--use-multithreading",
@@ -109,7 +109,7 @@ def get_args():
     )
 
     parser.add_argument(
-        "--dataset", type=str, default="mp3d", help="Picks which dataset to load: mp3d | gibson", required=True
+        "--dataset", type=str, default="gibson", help="Picks which dataset to load: mp3d | gibson", required=True
     )
 
     parser.add_argument(

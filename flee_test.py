@@ -64,7 +64,7 @@ dataset = make_dataset(config.DATASET.TYPE, config=config.DATASET)
 datasets = {"val": dataset}
 
 env = ExplorationRLEnv(config=config, datasets=datasets)
-goal_radius = env.episodes[0].goals[0].radius
+goal_radius = env.[0].goals[0].radius
 if goal_radius is None:
     goal_radius = config.SIMULATOR.FORWARD_STEP_SIZE
 sim = env.habitat_env.sim

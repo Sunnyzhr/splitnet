@@ -100,9 +100,10 @@ class Optimizer(object):
 
 
 class VisualPPO(Optimizer):
+    # it calculate the losses
     def update(self, rollouts, shell_args):
-        advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-5)
+        advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1] # zhr:?? why rollouts is 129 dimensions
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-5) # zhr: torch.Size([128, 1, 1])
 
         value_loss_epoch = 0
         action_loss_epoch = 0
@@ -113,9 +114,9 @@ class VisualPPO(Optimizer):
         feature_prediction_loss_value = 0
         visual_losses = {}
 
-        if hasattr(self.actor_critic.base, "decoder_enabled") and (
+        if hasattr(self.actor_critic.base, "decoder_enabled") and ( 
             shell_args.use_visual_loss or shell_args.use_motion_loss
-        ):
+        ):# zhr: 1*(0+0)=0
 
             if shell_args.freeze_encoder_features:
                 visual_features = pt_util.remove_dim(
@@ -207,38 +208,45 @@ class VisualPPO(Optimizer):
             assert shell_args.no_motion_loss
 
         decoder_enabled = hasattr(self.actor_critic.base, "decoder_enabled") and self.actor_critic.base.decoder_enabled
-        if decoder_enabled:
+        if decoder_enabled: # zhr: False
             self.actor_critic.base.disable_decoder()
-        if shell_args.use_policy_loss:
-            for _ in range(self.ppo_epoch):
-                if self.actor_critic.is_recurrent:
-                    data_generator = rollouts.recurrent_generator(advantages, self.num_mini_batch)
+        if shell_args.use_policy_loss: # zhr: True
+            for _ in range(self.ppo_epoch): # zhr: 4
+                if self.actor_critic.is_recurrent: # zhr: True
+                    data_generator = rollouts.recurrent_generator(advantages, self.num_mini_batch) # num_mini_batch == 1
                 else:
                     data_generator = rollouts.feed_forward_generator(advantages, self.num_mini_batch)
 
                 for sample in data_generator:
                     (
-                        obs_batch,
-                        recurrent_hidden_states_batch,
-                        actions_batch,
-                        value_preds_batch,
-                        return_batch,
-                        masks_batch,
-                        old_action_log_probs_batch,
-                        adv_targ,
-                        additional_obs_batch,
+                        obs_batch, # zhr: torch.Size([128, 3, 256, 256])
+                        recurrent_hidden_states_batch, # zhr: torch.Size([1, 256])
+                        actions_batch, # zhr: torch.Size([128, 1]),                 all are tensor(0) or tensor(1).
+                        value_preds_batch, # zhr: torch.Size([128, 1])              e.g. tensor(-1.4297),tensor(-0.2426)
+                        return_batch, # zhr: torch.Size([128, 1])                   e.g. tensor(-1.3812),tensor(0.6272)
+                        masks_batch, # zhr: torch.Size([128, 1])                    all are tensor(1.)
+                        old_action_log_probs_batch, # zhr: torch.Size([128, 1])     e.g. tensor(-2.7402),tensor(-0.0168)
+                        adv_targ, # zhr: torch.Size([128, 1])                       e.g. tensor(-1.7154),tensor(2.2685)
+                        additional_obs_batch, # zhr: dict_keys(['pointgoal', 'prev_action_one_hot', 'prev_action', 'visual_encoder_features'])
                     ) = sample
-
+                    """
+                    zhr:
+                    # additional_obs_batch["pointgoal"].shape               torch.Size([128, 2])
+                    # additional_obs_batch["prev_action_one_hot"].shape     torch.Size([128, 3])
+                    # additional_obs_batch["prev_action"].shape             torch.Size([128, 1])
+                    # additional_obs_batch["visual_encoder_features"].shape torch.Size([128, 128, 8, 8])
+                    """
                     try:
                         with torch.autograd.detect_anomaly():
                             inputs = {
                                 "target_vector": additional_obs_batch["pointgoal"],
                                 "prev_action_one_hot": additional_obs_batch["prev_action_one_hot"],
+                                # "zhr_new_input": torch.rand(1, 3).to("cuda:0"), #ZHR:debug2
                             }
                             if (
                                 "visual_encoder_features" in additional_obs_batch
                                 and not self.actor_critic.base.end_to_end
-                            ):
+                            ): # zhr: True
                                 inputs["visual_encoder_features"] = additional_obs_batch["visual_encoder_features"]
                             else:
                                 inputs["images"] = obs_batch
@@ -251,7 +259,7 @@ class VisualPPO(Optimizer):
                             surr2 = torch.clamp(ratio, 1.0 - self.clip_param, 1.0 + self.clip_param) * adv_targ
                             action_loss = -torch.min(surr1, surr2).mean()
 
-                            if self.use_clipped_value_loss:
+                            if self.use_clipped_value_loss: # zhr: True
                                 value_pred_clipped = value_preds_batch + (values - value_preds_batch).clamp(
                                     -self.clip_param, self.clip_param
                                 )
@@ -275,16 +283,16 @@ class VisualPPO(Optimizer):
                                 for param in self.actor_critic.base.visual_encoder.module.encoder.parameters():
                                     param.grad = None
 
-                            if not self.verified_gradient_propagation[1]:
+                            if not self.verified_gradient_propagation[1]: # zhr: [False,True]
                                 # Check that appropriate gradients are propagated.
-                                if shell_args.update_encoder_features and shell_args.end_to_end:
+                                if shell_args.update_encoder_features and shell_args.end_to_end: # zhr: 0*0=0
                                     for param in self.actor_critic.base.visual_encoder.module.encoder.parameters():
                                         assert param.grad is not None and param.grad.abs().sum().item() > 1e-10
                                 else:
                                     for param in self.actor_critic.base.visual_encoder.module.encoder.parameters():
                                         assert param.grad is None
 
-                                if shell_args.use_policy_loss:
+                                if shell_args.use_policy_loss: # zhr: True
                                     assert (
                                         shell_args.update_policy_decoder_features or shell_args.update_encoder_features
                                     )
@@ -299,7 +307,7 @@ class VisualPPO(Optimizer):
                                     for param in self.actor_critic.base.rl_layers.parameters():
                                         assert param.grad is None
 
-                                self.verified_gradient_propagation[1] = True
+                                self.verified_gradient_propagation[1] = True # zhr: [False,True]
 
                             nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
                             self.optimizer.step()
@@ -314,7 +322,7 @@ class VisualPPO(Optimizer):
                         raise re
 
                     value_loss_epoch += value_loss.item()
-                    action_loss_epoch += action_loss.item()
+                    action_loss_epoch += action_loss.item() 
                     dist_entropy_epoch += dist_entropy.item()
                     loss_total_epoch += loss_total.item()
 
@@ -333,10 +341,10 @@ class VisualPPO(Optimizer):
             value_loss_epoch,
             action_loss_epoch,
             dist_entropy_epoch,
-            visual_loss_value,
-            visual_losses,
-            egomotion_loss_value,
-            feature_prediction_loss_value,
+            visual_loss_value, # zhr: 0, because it is frozen
+            visual_losses, # zhr: 0, because it is frozen
+            egomotion_loss_value, # zhr: 0, because it is frozen
+            feature_prediction_loss_value, # zhr: 0, because it is frozen
         )
 
 
