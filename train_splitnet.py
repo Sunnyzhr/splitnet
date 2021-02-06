@@ -20,7 +20,7 @@ from yolov5.zhr_detect_3 import hayo
 object_detector = hayo()
 # import cv2
 import os
-os.system('play -nq -t alsa synth 0.05 sine 200')
+os.system('play -nq -t alsa synth 0.05 sine 300')
 
    
 
