@@ -192,7 +192,7 @@ class RLBaseWithVisualEncoder(model.NNBase):
 
         super(RLBaseWithVisualEncoder, self).__init__(
             recurrent,
-            recurrent_input_size=hidden_size + self.target_vector_size + self.action_size, #ZHR:debug2
+            recurrent_input_size=hidden_size + self.target_vector_size + self.action_size + 3, #ZHR:debug3
             hidden_size=hidden_size,
         ) # zhr: config GRU 
 
@@ -214,14 +214,14 @@ class RLBaseWithVisualEncoder(model.NNBase):
                 ConvBlock(self.num_output_channels, hidden_size), # zhr: 128 channels -> 256 channels
                 # zhr: ConvBlock.__init__(self, in_channels, out_channels, padding=1, kernel_size=3, stride=1, with_nonlinearity=True)
                 ConvBlock(hidden_size, hidden_size), # zhr: 256 channels -> 256 channels
-                nn.AvgPool2d(2, 2), # zhr: [256,4,4]
+                nn.AvgPool2d(2, 2), # zhr: [256,4,4]zhr_new_input
                 pt_util.RemoveDim((2, 3)), # zhr: flatten
                 nn.Linear(hidden_size * 4 * 4, hidden_size), # zhr: 256*4*4->256
-            )
+        )
 
         self.rl_layers = nn.Sequential(
-            nn.Linear(hidden_size + self.target_vector_size + self.action_size, hidden_size),# zhr: 256+2+3,256
-            # nn.Linear(hidden_size + self.target_vector_size + self.action_size + 3, hidden_size), #ZHR:debug2
+            # nn.Linear(hidden_size + self.target_vector_size + self.action_size, hidden_size),# zhr: 256+2+3,256
+            nn.Linear(hidden_size + self.target_vector_size + self.action_size + 3, hidden_size), #ZHR:debug3
             nn.ELU(inplace=True),
             nn.Linear(hidden_size, hidden_size),# zhr: 256,256
             nn.ELU(inplace=True),
@@ -281,7 +281,7 @@ class RLBaseWithVisualEncoder(model.NNBase):
         if self.target_vector_size > 0:
             target_vector = inputs.get("target_vector")
         prev_action_one_hot = inputs["prev_action_one_hot"]
-        # zhr_new_input = inputs.get("zhr_new_input") #ZHR:debug2
+        zhr_new_input = inputs.get("zhr_new_input") #ZHR:debug3
 
 
         if self.aah_im_blind:
@@ -346,19 +346,19 @@ class RLBaseWithVisualEncoder(model.NNBase):
                 rl_features = torch.cat((self.visual_features, target_vector, prev_action_one_hot), dim=1)
                 # # zhr: [rollouts,261] == cat([rollouts,256],[rollouts,2],[rollouts,3])
             else:
+                rl_features = torch.cat((self.visual_features, prev_action_one_hot, zhr_new_input), dim=1) #ZHR:debug3
                 # rl_features = torch.cat((self.visual_features, prev_action_one_hot), dim=1)
-                rl_features = torch.cat((self.visual_features, prev_action_one_hot), dim=1)
 
         # RL Part
         if self.is_recurrent: # zhr: True
             rl_features, rnn_hxs = self._forward_gru(rl_features, rnn_hxs, masks)
-            # zhr: input 259 output 256. [rollouts,256],[1,256]
+            # zhr: input 259(+3) output 256. [rollouts,256],[1,256]
         if target_vector is not None:
             x = self.rl_layers(torch.cat((rl_features, target_vector, prev_action_one_hot), dim=1))
             # zhr: input 261 output 256;    x.shape==[rollouts,256]
         else:
-            x = self.rl_layers(torch.cat((rl_features, prev_action_one_hot), dim=1))
-            # x = self.rl_layers(torch.cat((rl_features, prev_action_one_hot, zhr_new_input), dim=1)) #ZHR:debug2
+            # x = self.rl_layers(torch.cat((rl_features, prev_action_one_hot), dim=1))
+            x = self.rl_layers(torch.cat((rl_features, prev_action_one_hot, zhr_new_input), dim=1)) #ZHR:debug3
 
         return self.critic_linear(x), x, rnn_hxs
         # zhr: rnn_hxs.shape=[1,256], whatever rollouts

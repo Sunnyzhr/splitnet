@@ -241,7 +241,7 @@ class VisualPPO(Optimizer):
                             inputs = {
                                 "target_vector": additional_obs_batch["pointgoal"],
                                 "prev_action_one_hot": additional_obs_batch["prev_action_one_hot"],
-                                # "zhr_new_input": torch.rand(1, 3).to("cuda:0"), #ZHR:debug2
+                                "zhr_new_input": additional_obs_batch["zhr_new_input"], #ZHR:debug3
                             }
                             if (
                                 "visual_encoder_features" in additional_obs_batch

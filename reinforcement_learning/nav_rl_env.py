@@ -149,6 +149,7 @@ class FormattedRLEnv(MultiDatasetEnv, ABC):
         # Action you took to get this image.
         obs["prev_action"] = self._previous_action
         obs["prev_action_one_hot"] = pt_util.get_one_hot_numpy(self._previous_action, len(SimulatorActions))
+        obs["zhr_collision_flag"] = self.zhr_collision_flag #ZHR:debug
         return obs
 
     def get_info(self, observations):
