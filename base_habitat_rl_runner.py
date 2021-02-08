@@ -321,7 +321,7 @@ class BaseHabitatRLRunner(object):
         width = self.configs[0].SIMULATOR.RGB_SENSOR.WIDTH
         #ZHR:debug3
         self.observation_space = {
-            # "zhr_new_input": ((3,), np.dtype(np.float32)),
+            "zhr_new_input": ((3,), np.dtype(np.float32)), #ZHR:debug3
             "pointgoal": ((2,), np.dtype(np.float32)),
             "prev_action_one_hot": ((len(ACTION_SPACE),), np.dtype(np.float32)),
             "prev_action": ((1,), np.dtype(np.int64)),
@@ -351,6 +351,7 @@ class BaseHabitatRLRunner(object):
         zhr_value, zhr_action, zhr_action_log_probs, zhr_rnn_hxs=self.agent.act(
         # self.agent.act( # zhr: this is the original
             {
+                "zhr_new_input": torch.rand(self.shell_args.num_processes, 3).to(self.device), #ZHR:debug3
                 "images": torch.rand(
                     (
                         self.shell_args.num_processes,
@@ -363,7 +364,6 @@ class BaseHabitatRLRunner(object):
                 "prev_action_one_hot": torch.rand(self.shell_args.num_processes, self.gym_action_space.n).to(
                     self.device
                 ),
-                # "zhr_new_input": torch.rand(self.shell_args.num_processes, 3).to(self.device), #ZHR:debug2
             },
             torch.rand(self.shell_args.num_processes, self.agent.recurrent_hidden_state_size).to(self.device),
             torch.rand(self.shell_args.num_processes, 1).to(self.device),
