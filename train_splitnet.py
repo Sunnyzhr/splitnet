@@ -213,22 +213,19 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                     with torch.no_grad():
                         start_t = time.time()
                         ### 
-                        tmp1 = 1.0 if self.zhr_collision_flag else 0.0
-                        tmp2 = 1.0 if self.zhr_prev_action == 0 else 0.0
-                        tmp3 = self.zhr_get_distance
-                        # tmp2 = 1.0 if 1 == self.rollouts.additional_observations_dict["prev_action_one_hot"][step][0][0] else 0.0
+                        # tmp1 = 1.0 if self.zhr_collision_flag else 0.0
+                        # tmp2 = 1.0 if self.zhr_prev_action == 0 else 0.0
+                        # tmp3 = self.zhr_get_distance
+                        # # tmp2 = 1.0 if 1 == self.rollouts.additional_observations_dict["prev_action_one_hot"][step][0][0] else 0.0
 
-                        zhr_replace = torch.from_numpy(np.array([[tmp1,tmp2,tmp3]],dtype="int")).to("cuda:0")
+                        # zhr_replace = torch.from_numpy(np.array([[tmp1,tmp2,tmp3]],dtype="int")).to("cuda:0")
                         ###
                         value, action, action_log_prob, recurrent_hidden_states = self.agent.act(
                             {
                                 "images": self.rollouts.obs[step],
                                 "target_vector": 0.00000000 * self.rollouts.additional_observations_dict["pointgoal"][step],
-                                # "prev_action_one_hot": self.rollouts.additional_observations_dict[
-                                #     "prev_action_one_hot"
-                                # ][step],
-                                "prev_action_one_hot": zhr_replace, #ZHR:debuug
-                                # "zhr_new_input": torch.rand(1, 3).to(self.device), #ZHR:debug2
+                                "prev_action_one_hot": self.rollouts.additional_observations_dict["prev_action_one_hot"][step],
+                                "zhr_new_input": self.rollouts.additional_observations_dict["zhr_new_input"][step], #ZHR:debug3
                             },
                             self.rollouts.recurrent_hidden_states[step],
                             self.rollouts.masks[step],
@@ -321,6 +318,7 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
 
                         start_t = time.time()
                         obs, rewards, dones, infos = self.envs.step(translated_action_space)# zhr: when getting to the max-episode-length
+                        obs["zhr_new_input"] = torch.from_numpy(np.array([0,0, 233 if action_cpu[0] == 0 else -2])) #ZHR:debug3
                         self.zhr_collision_flag = infos[0]["zhr_collision_flag"]
                         self.zhr_get_distance = infos[0]["zhr_get_distance"] 
                         # ## to print out useful infomation
@@ -367,9 +365,9 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                         # reward_flee = 1.0*(infos[0]["zhr_get_distance"] - infos[0]["zhr_prev_distance"])
                         rewards = reward_success + penalty_time  + reward_forward + penalty_collision
                         rewards = torch.from_numpy(np.array(rewards, dtype='float'))
-                        print(f"Act:{action_cpu[0]}.", f"{success_rate:.3f}Done:{success}.", f"iter:{iter_count+self.start_iter}.",\
+                        print(f"Act:{action_cpu[0]}.", f"{success_rate*100:.1f}%Done:{success}.", f"iter:{iter_count+self.start_iter}.",\
                             f"Epi_id:{infos[0]['episode_id']}. Step:{step}. Acc_R:{current_episode_rewards[0]:.5f}. Cur_R:{rewards:.5f}.",\
-                            f"{zhr_validity_index:.3f}Acc_path{infos[0]['zhr_accumulate_path']:.5f}",\
+                            f"{zhr_validity_index*100:.1f}%Acc_path{infos[0]['zhr_accumulate_path']:.5f}",\
                             f'delta_distance:{infos[0]["zhr_get_distance"] - infos[0]["zhr_prev_distance"]:.5f}',\
                             f"Collision:{self.zhr_collision_flag}")
 
@@ -409,8 +407,8 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                         """
                         
                         # ### zhr: Show the ego information
-                        if False:
-                        # if True:           
+                        # if False:
+                        if True:           
                             matplotlib_use('TkAgg')
                             tmp=infos[0]["top_down_map"]["map"]
                             top_down_map = maps.colorize_topdown_map(infos[0]["top_down_map"]["map"])   
@@ -607,6 +605,7 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                             [[0.0] if "bad_transition" in info.keys() else [1.0] for info in infos]
                         )
 
+                        #ZHR:debug3
                         self.rollouts.insert(
                             obs, recurrent_hidden_states, action, action_log_prob, value, rewards, masks, bad_masks
                         )# the rewards will then be used to update weights      
@@ -640,7 +639,7 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                             "prev_action_one_hot": self.rollouts.additional_observations_dict["prev_action_one_hot"][
                                 -1
                             ],
-                            # "zhr_new_input": torch.rand(1, 3).to(self.device), #ZHR:debug2
+                            "zhr_new_input": self.rollouts.additional_observations_dict["zhr_new_input"][-1], #ZHR:debug3
                         },
                         self.rollouts.recurrent_hidden_states[-1],
                         self.rollouts.masks[-1],
