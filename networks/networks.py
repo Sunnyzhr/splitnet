@@ -192,7 +192,7 @@ class RLBaseWithVisualEncoder(model.NNBase):
 
         super(RLBaseWithVisualEncoder, self).__init__(
             recurrent,
-            recurrent_input_size=hidden_size + self.target_vector_size + self.action_size + 3, #ZHR:debug3
+            recurrent_input_size=hidden_size + self.target_vector_size + self.action_size + 1, #ZHR:debug3
             hidden_size=hidden_size,
         ) # zhr: config GRU 
 
@@ -220,10 +220,21 @@ class RLBaseWithVisualEncoder(model.NNBase):
         )
 
         self.rl_layers = nn.Sequential(
-            # nn.Linear(hidden_size + self.target_vector_size + self.action_size, hidden_size),# zhr: 256+2+3,256
-            nn.Linear(hidden_size + self.target_vector_size + self.action_size + 3, hidden_size), #ZHR:debug3
+            # # nn.Linear(hidden_size + self.target_vector_size + self.action_size, hidden_size),# zhr: 256+2+3->256->256->256
+            # nn.Linear(hidden_size + self.target_vector_size + self.action_size + 3, hidden_size), #ZHR:debug3
+            # nn.ELU(inplace=True),
+            # nn.Linear(hidden_size, hidden_size),# zhr: 256,256
+            # nn.ELU(inplace=True),
+
+            #ZHR:debug2 262->512->512->256->256
+            # nn.Linear(hidden_size + self.target_vector_size + self.action_size + 1, 2*hidden_size), 
+            nn.Linear(hidden_size, 2*hidden_size), #ZHR:debug3
             nn.ELU(inplace=True),
-            nn.Linear(hidden_size, hidden_size),# zhr: 256,256
+            nn.Linear(2*hidden_size,2*hidden_size),
+            nn.ELU(inplace=True),
+            nn.Linear(2*hidden_size,hidden_size),
+            nn.ELU(inplace=True),
+            nn.Linear(hidden_size,hidden_size),
             nn.ELU(inplace=True),
         )
 
@@ -347,6 +358,8 @@ class RLBaseWithVisualEncoder(model.NNBase):
                 # # zhr: [rollouts,261] == cat([rollouts,256],[rollouts,2],[rollouts,3])
             else:
                 rl_features = torch.cat((self.visual_features, prev_action_one_hot, zhr_new_input), dim=1) #ZHR:debug3
+                # print(abs(rl_features).max())
+                rl_features = (rl_features/(abs(rl_features).max()))#ZHR:debug3
                 # rl_features = torch.cat((self.visual_features, prev_action_one_hot), dim=1)
 
         # RL Part
@@ -358,7 +371,8 @@ class RLBaseWithVisualEncoder(model.NNBase):
             # zhr: input 261 output 256;    x.shape==[rollouts,256]
         else:
             # x = self.rl_layers(torch.cat((rl_features, prev_action_one_hot), dim=1))
-            x = self.rl_layers(torch.cat((rl_features, prev_action_one_hot, zhr_new_input), dim=1)) #ZHR:debug3
+            # x = self.rl_layers(torch.cat((rl_features, prev_action_one_hot, zhr_new_input), dim=1)) 
+            x = self.rl_layers(rl_features) #ZHR:debug3
 
         return self.critic_linear(x), x, rnn_hxs
         # zhr: rnn_hxs.shape=[1,256], whatever rollouts
@@ -406,6 +420,7 @@ class VisualPolicy(model.Policy):
         dist = self.dist(actor_features)
         self.last_dist = dist
 
+        # deterministic = True #ZHR:debug2
         if deterministic:
             action = dist.mode()
         else:

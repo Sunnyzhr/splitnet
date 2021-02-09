@@ -318,7 +318,8 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
 
                         start_t = time.time()
                         obs, rewards, dones, infos = self.envs.step(translated_action_space)# zhr: when getting to the max-episode-length
-                        obs["zhr_new_input"] = torch.from_numpy(np.array([0,0, 233 if action_cpu[0] == 0 else -2])) #ZHR:debug3
+                        obs["zhr_new_input"] = torch.from_numpy(np.array([1.0 if infos[0]["zhr_collision_flag"] else 0.0])) #ZHR:debug3
+                        
                         self.zhr_collision_flag = infos[0]["zhr_collision_flag"]
                         self.zhr_get_distance = infos[0]["zhr_get_distance"] 
                         # ## to print out useful infomation
@@ -358,9 +359,9 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                         zhr_validity_index = infos[0]['zhr_get_distance']/(1e-5+infos[0]['zhr_accumulate_path'])
                         ### zhr: design new rewards
                         penalty_time = -0.01
-                        reward_success = zhr_validity_index*0.01*self.shell_args.max_episode_length if dones[0] else 0.0
+                        reward_success = 3 * zhr_validity_index*0.01*self.shell_args.max_episode_length if dones[0] else 0.0
                         # penalty_rotate = -0.01 if action_cpu[0] == self.zhr_prev_action and action_cpu[0] != 0 else 0.0 #when init: zhr_prev_action == 0
-                        penalty_collision = -0.02 if infos[0]["zhr_collision_flag"] else 0.0
+                        penalty_collision = -0.04 if infos[0]["zhr_collision_flag"] else 0.0
                         reward_forward = 0.015 if action_cpu[0] == 0 else 0.0
                         # reward_flee = 1.0*(infos[0]["zhr_get_distance"] - infos[0]["zhr_prev_distance"])
                         rewards = reward_success + penalty_time  + reward_forward + penalty_collision
@@ -407,8 +408,8 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                         """
                         
                         # ### zhr: Show the ego information
-                        # if False:
-                        if True:           
+                        if False:
+                        # if True:           
                             matplotlib_use('TkAgg')
                             tmp=infos[0]["top_down_map"]["map"]
                             top_down_map = maps.colorize_topdown_map(infos[0]["top_down_map"]["map"])   
@@ -619,6 +620,7 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                         # rgb_img = Image.fromarray(zhr_rgb, mode="RGB")
                         # rgb_img.save(f"/home/u/Desktop/splitnet/zhr/training_success/{self.start_iter}_{iter_count}_{conf}.png")
                         break # wait to update weights
+                
                 if infos[0]["zhr_episode_over"]: #to restart the rollout step to 0
                     print("This step is now skipped")
                     zhr_iter_count -= 1
@@ -679,17 +681,19 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                     "zhr/rewards": rewards,
                     "zhr/step": step,
                     "zhr/validity": zhr_validity_index,
-                    "zhr/dist_entropy": dist_entropy
+                    "zhr/dist_entropy": dist_entropy,
+                    "zhr/success_validity": zhr_validity_index if dones[0] else 0.0,
                     })
-                self.logger.dict_log(zhr_log_dict, step=zhr_iter_count)
+                self.logger.dict_log(zhr_log_dict, step=zhr_iter_count+self.start_iter)#ZHR:debug2
 
 
                 self.rollouts.after_update() # zhr:?? 129 dimensions. Replace var[0] with var[-1]
 
                 # save for every interval-th episode or for the last epoch
-                if iter_count % self.shell_args.save_interval == 0 or iter_count == num_updates - 1:
-                    if iter_count != 0: # zhr: do not save for the first episode
-                        self.save_checkpoint(5, total_num_steps)
+                if zhr_iter_count % self.shell_args.save_interval == 0 or iter_count == num_updates - 1:
+                    if zhr_iter_count != 0: # zhr: do not save for the first episode
+                        # self.save_checkpoint(5, total_num_steps) #ZHR:original
+                        self.save_checkpoint(5, zhr_iter_count) #ZHR:debug2
 
                 total_num_steps += self.shell_args.num_processes * self.shell_args.num_forward_rollout_steps
 

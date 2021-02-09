@@ -216,8 +216,9 @@ class VisualPPO(Optimizer):
                     data_generator = rollouts.recurrent_generator(advantages, self.num_mini_batch) # num_mini_batch == 1
                 else:
                     data_generator = rollouts.feed_forward_generator(advantages, self.num_mini_batch)
-
+                zhr_cnt = 0
                 for sample in data_generator:
+                    zhr_cnt += 1
                     (
                         obs_batch, # zhr: torch.Size([128, 3, 256, 256])
                         recurrent_hidden_states_batch, # zhr: torch.Size([1, 256])
@@ -325,7 +326,7 @@ class VisualPPO(Optimizer):
                     action_loss_epoch += action_loss.item() 
                     dist_entropy_epoch += dist_entropy.item()
                     loss_total_epoch += loss_total.item()
-
+                print(zhr_cnt)
         num_updates = self.ppo_epoch * self.num_mini_batch
 
         if decoder_enabled:

@@ -217,6 +217,7 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
                         "images": obs["rgb"].to(self.device),
                         "target_vector": obs["pointgoal"].to(self.device),
                         "prev_action_one_hot": obs["prev_action_one_hot"].to(self.device),
+                        "zhr_new_input": torch.from_numpy(np.array([[1.0 if obs["zhr_collision_flag"] else 0.0]],dtype="float32")).to(self.device), #ZHR:debug3
                     },
                     recurrent_hidden_states,
                     masks,

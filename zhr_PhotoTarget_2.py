@@ -18,10 +18,10 @@ RIGHT_KEY="d"
 SAVE="s"
 RESET="r"
 
-# from train_splitnet import HabitatRLTrainAndEvalRunner
-# class TakePhoto(HabitatRLTrainAndEvalRunner):
-from eval_splitnet import HabitatRLEvalRunner
-class TakePhoto(HabitatRLEvalRunner):
+from train_splitnet import HabitatRLTrainAndEvalRunner
+class TakePhoto(HabitatRLTrainAndEvalRunner):
+# from eval_splitnet import HabitatRLEvalRunner
+# class TakePhoto(HabitatRLEvalRunner):
     def __init__(self, create_decoder=True):
         super(TakePhoto, self).__init__(create_decoder)
     def take_photo(self):
