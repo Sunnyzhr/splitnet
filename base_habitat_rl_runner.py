@@ -76,6 +76,7 @@ class BaseHabitatRLRunner(object):
         self.time_str = None
         self.optimizer = None
         self.agent = None
+        self.agent_PhaseTwo = None
         self.start_iter = None
         self.observation_space = None
         self.env_types = None
@@ -101,20 +102,24 @@ class BaseHabitatRLRunner(object):
 
     def restore(self):
         if self.shell_args.load_model:
+            print("\n++++++++ Now load the network of PhaseOne ++++++++"*3)
             self.start_iter = pt_util.restore_from_folder(
                 self.agent, # VisualPolicy(.....)
                 os.path.join(self.shell_args.log_prefix, self.shell_args.checkpoint_dirname,"*"),
-                # '/home/u/Desktop/splitnet/output_files/pointnav/gibson/splitnet_pretrain_supervised_rl/checkpoints/*'
+                # '/home/u/Desktop/splitnet/output_files/pointnav/gibson/splitnet_pretrain_supervised_rl/   checkpoints/    *'
                 self.shell_args.saved_variable_prefix, # ''
                 self.shell_args.new_variable_prefix, # ''
             )# zhr: start with zhr_weights
-
-            # self.start_iter = pt_util.restore_from_folder(
-            #     self.agent,
-            #     os.path.join(self.shell_args.log_prefix, self.shell_args.checkpoint_dirname, "*"),
-            #     self.shell_args.saved_variable_prefix,
-            #     self.shell_args.new_variable_prefix,
-            # )
+            print("++++++++ Loaded network of PhaseOne ++++++++\n"*3)
+            print("\n++++++++ Now load the network of PhaseTwo ++++++++"*3)
+            # ZHR:debug-1 
+            pt_util.restore_from_folder(
+                self.agent_PhaseTwo,
+                os.path.join("/home/u/Desktop/splitnet/output_files/pointnav/gibson/splitnet_pretrain_supervised_rl/checkpoints/best_weights", "*"),
+                self.shell_args.saved_variable_prefix,
+                self.shell_args.new_variable_prefix,
+            )
+            print("++++++++ Loaded network of PhaseTwo ++++++++\n"*3)
         else:
             print("Randomly initializing parameters")
             pt_util.reset_module(self.agent)
@@ -122,6 +127,8 @@ class BaseHabitatRLRunner(object):
     def save_checkpoint(self, num_to_keep=-1, iteration=0):
         if self.shell_args.save_checkpoints and not self.shell_args.no_weight_update:
             pt_util.save(self.agent, self.checkpoint_dir, num_to_keep=num_to_keep, iteration=iteration)
+            #ZHR:debug-1
+            # pt_util.save(self.agent_PhaseTwo, self.checkpoint_dir, num_to_keep=num_to_keep, iteration=iteration)
 
     def setup(self, create_decoder):
         self.setup_device()
@@ -143,7 +150,7 @@ class BaseHabitatRLRunner(object):
             elif self.shell_args.dataset == "gibson":
                 # data_path = "data/datasets/pointnav/gibson/v1/{split}/{split}.json.gz"
                 data_path = "data/datasets/pointnav/gibson/v1/{split}/zhr.json.gz"
-# Attention: both eval_.. and base_.. have data_path configuration!!!!!!!!!!
+            # Attention: both eval_.. and base_.. have data_path configuration!!!!!!!!!!
             else:
                 raise NotImplementedError("No rule for this dataset.")
 
@@ -236,18 +243,43 @@ class BaseHabitatRLRunner(object):
             ),# zhr: construct network
         )
 
-        # self.agent.agent_config = self.configs[0]["SIMULATOR"]["AGENT_0"]
+        #ZHR:debug-1
+        self.agent_PhaseTwo = VisualPolicy( # zhr: Key class
+            self.gym_action_space, #<class 'gym.spaces.discrete.Discrete'> such as Discrete(3).
+            base=networks.RLBase_PhaseTwo, # zhr: Key class
+            base_kwargs=dict(
+                encoder_type=encoder_type,# zhr: CNN, that is, ShallowVisualEncoder
+                decoder_output_info=decoder_output_info,# zhr: auxiliary visual task [("reconstruction", 3), ("depth", 1), ("surface_normals", 3)]
+                recurrent=True,
+                end_to_end=self.shell_args.end_to_end,
+                hidden_size=256,
+                target_vector_size=target_vector_size,# zhr: 2
+                action_size=len(ACTION_SPACE),
+                gpu_ids=self.torch_devices,
+                create_decoder=create_decoder,# zhr: True
+                blind=self.shell_args.blind,
+            ),# zhr: construct network
+        )
 
-# zhr: networks.RLBaseWithVisualEncoder.__init__()
-#       define the layers of (GRU, ShallowVisualEncoder, visual_projection, ego_motion, motion_model, critic)
-# zhr: networks.RLBaseWithVisualEncoder.forward()
-#       image->encoder->[rollouts,128,8,8]->projection->[rollouts,256]->cat target,motion->[rollouts,261]->rl_layer->[rollouts,256]
-#       ->critic[rollouts,1]     x[rollouts,256]     rnn_hxs[1,256]
-
+        """
+        # zhr: networks.RLBaseWithVisualEncoder.__init__()
+        #       define the layers of (GRU, ShallowVisualEncoder, visual_projection, ego_motion, motion_model, critic)
+        # zhr: networks.RLBaseWithVisualEncoder.forward()
+        #       image->encoder->[rollouts,128,8,8]->projection->[rollouts,256]->cat target,motion->[rollouts,261]->rl_layer->[rollouts,256]
+        #       ->critic[rollouts,1]     x[rollouts,256]     rnn_hxs[1,256]
+        """
 
         if self.shell_args.debug:
             print("actor critic", self.agent)
         self.agent.to(self.device)
+        
+        #ZHR:debug-1
+        self.agent_PhaseTwo.to(self.device)
+        """!!!!!!!!!!!!!!!!!!
+        Otherwise, it will encounter error: "Input type (torch.cuda.FloatTensor) and weight type (torch.FloatTensor) should be the same"
+        """
+
+
         self.time_str = misc_util.get_time_str()
 
         visual_layers = self.agent.base.visual_encoder.module
@@ -274,13 +306,11 @@ class BaseHabitatRLRunner(object):
         if self.shell_args.freeze_motion_decoder_features and self.shell_args.freeze_policy_decoder_features:
             for param in self.agent.base.visual_projection.parameters():
                 param.requires_grad = False
-
         if self.shell_args.freeze_motion_decoder_features:
             for param in self.agent.base.egomotion_layer.parameters():
                 param.requires_grad = False
             for param in self.agent.base.motion_model_layer.parameters():
                 param.requires_grad = False
-
         if self.shell_args.freeze_policy_decoder_features:
             for param in self.agent.base.gru.parameters():
                 param.requires_grad = False
@@ -289,6 +319,24 @@ class BaseHabitatRLRunner(object):
             for param in self.agent.base.critic_linear.parameters():
                 param.requires_grad = False
             for param in self.agent.dist.parameters():
+                param.requires_grad = False
+
+        if self.shell_args.freeze_motion_decoder_features and self.shell_args.freeze_policy_decoder_features:
+            for param in self.agent_PhaseTwo.base.visual_projection.parameters():
+                param.requires_grad = False
+        if self.shell_args.freeze_motion_decoder_features:
+            for param in self.agent_PhaseTwo.base.egomotion_layer.parameters():
+                param.requires_grad = False
+            for param in self.agent_PhaseTwo.base.motion_model_layer.parameters():
+                param.requires_grad = False
+        if self.shell_args.freeze_policy_decoder_features:
+            for param in self.agent_PhaseTwo.base.gru.parameters():
+                param.requires_grad = False
+            for param in self.agent_PhaseTwo.base.rl_layers.parameters():
+                param.requires_grad = False
+            for param in self.agent_PhaseTwo.base.critic_linear.parameters():
+                param.requires_grad = False
+            for param in self.agent_PhaseTwo.dist.parameters():
                 param.requires_grad = False
 
         if self.shell_args.algo == "ppo":
@@ -340,37 +388,37 @@ class BaseHabitatRLRunner(object):
             )
 
         # Send dummy batch through to allocate memory before vecenv
-        print("Feeding dummy batch")
-        dummy_start = time.time()
+        # print("Feeding dummy batch")
+        # dummy_start = time.time()
 
-        # zhr_tmp1 = torch.rand(self.shell_args.num_processes, self.agent.recurrent_hidden_state_size)
-        # zhr_tmp2 = torch.rand(self.shell_args.num_processes, 1)
-        # zhr_tmp1 = zhr_tmp1.to(self.device)
-        # zhr_tmp2 = zhr_tmp2.to(self.device)
-        # # https://stackoverflow.com/questions/61149598/pytorchs-input-type-torch-floattensor-and-weight-type-torch-cuda-floattensor
-        zhr_value, zhr_action, zhr_action_log_probs, zhr_rnn_hxs=self.agent.act(
-        # self.agent.act( # zhr: this is the original
-            {
-                "zhr_new_input": torch.rand(self.shell_args.num_processes, 1).to(self.device), #ZHR:debug3
-                "images": torch.rand(
-                    (
-                        self.shell_args.num_processes,
-                        3,
-                        self.configs[0].SIMULATOR.RGB_SENSOR.HEIGHT,
-                        self.configs[0].SIMULATOR.RGB_SENSOR.WIDTH,
-                    )
-                ).to(self.device),
-                "target_vector": torch.rand(self.shell_args.num_processes, target_vector_size).to(self.device),
-                "prev_action_one_hot": torch.rand(self.shell_args.num_processes, self.gym_action_space.n).to(
-                    self.device
-                ),
-            },
-            torch.rand(self.shell_args.num_processes, self.agent.recurrent_hidden_state_size).to(self.device),
-            torch.rand(self.shell_args.num_processes, 1).to(self.device),
-            # zhr_tmp1,
-            # zhr_tmp2,
-        )
-        print("Done feeding dummy batch %.3f" % (time.time() - dummy_start))
+        # # zhr_tmp1 = torch.rand(self.shell_args.num_processes, self.agent.recurrent_hidden_state_size)
+        # # zhr_tmp2 = torch.rand(self.shell_args.num_processes, 1)
+        # # zhr_tmp1 = zhr_tmp1.to(self.device)
+        # # zhr_tmp2 = zhr_tmp2.to(self.device)
+        # # # https://stackoverflow.com/questions/61149598/pytorchs-input-type-torch-floattensor-and-weight-type-torch-cuda-floattensor
+        # zhr_value, zhr_action, zhr_action_log_probs, zhr_rnn_hxs=self.agent.act(
+        # # self.agent.act( # zhr: this is the original
+        #     {
+        #         "zhr_new_input": torch.rand(self.shell_args.num_processes, 1).to(self.device), #ZHR:debug3
+        #         "images": torch.rand(
+        #             (
+        #                 self.shell_args.num_processes,
+        #                 3,
+        #                 self.configs[0].SIMULATOR.RGB_SENSOR.HEIGHT,
+        #                 self.configs[0].SIMULATOR.RGB_SENSOR.WIDTH,
+        #             )
+        #         ).to(self.device),
+        #         "target_vector": torch.rand(self.shell_args.num_processes, target_vector_size).to(self.device),
+        #         "prev_action_one_hot": torch.rand(self.shell_args.num_processes, self.gym_action_space.n).to(
+        #             self.device
+        #         ),
+        #     },
+        #     torch.rand(self.shell_args.num_processes, self.agent.recurrent_hidden_state_size).to(self.device),
+        #     torch.rand(self.shell_args.num_processes, 1).to(self.device),
+        #     # zhr_tmp1,
+        #     # zhr_tmp2,
+        # )
+        # print("Done feeding dummy batch %.3f" % (time.time() - dummy_start))
         self.start_iter = 0
         self.checkpoint_dir = os.path.join(
             self.shell_args.log_prefix, self.shell_args.checkpoint_dirname, self.time_str

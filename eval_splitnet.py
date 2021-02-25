@@ -40,7 +40,7 @@ def get_eval_dataset(shell_args, data_subset="val"):
     elif shell_args.dataset == "gibson":
         # data_path = "data/datasets/pointnav/gibson/v1/{split}/{split}.json.gz"
         data_path = "data/datasets/pointnav/gibson/v1/{split}/zhr.json.gz"
-# Attention: both eval_.. and base_.. have data_path configuration!!!!!!!!!!!!!
+        # Attention: both eval_.. and base_.. have data_path configuration!!!!!!!!!!!!!
     else:
         raise NotImplementedError("No rule for this dataset.")
     config = get_dataset_config(data_path, data_subset, shell_args.max_episode_length, 0, [], [])
@@ -65,25 +65,16 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
 
     def setup(self, create_decoder):
         super(HabitatRLEvalRunner, self).setup(create_decoder)
-        # if self.shell_args.data_subset != "train": 
-        if True:
-        # zhr: when traing, do not make eval dataset
-            eval_dataset = get_eval_dataset(self.shell_args)
-            if self.shell_args.record_video:
-                random.shuffle(eval_dataset.episodes)
-            self.num_eval_episodes_total = len(eval_dataset.episodes)
-            self.eval_datasets = eval_dataset.get_splits(self.shell_args.num_processes, allow_uneven_splits=True)
-            self.eval_logger = None
-            if self.shell_args.tensorboard and self.shell_args.eval_interval is not None:
-                self.eval_logger = tensorboard_logger.Logger(
-                    os.path.join(self.shell_args.log_prefix, self.shell_args.tensorboard_dirname, self.time_str + "_test")
-                )
-            self.datasets = {"val": self.eval_datasets}
+        eval_dataset = get_eval_dataset(self.shell_args)
+        self.num_eval_episodes_total = len(eval_dataset.episodes)
+        self.eval_datasets = eval_dataset.get_splits(self.shell_args.num_processes, allow_uneven_splits=True)
+        self.eval_logger = None
+        if self.shell_args.tensorboard and self.shell_args.eval_interval is not None:
+            self.eval_logger = tensorboard_logger.Logger(os.path.join(self.shell_args.log_prefix, self.shell_args.tensorboard_dirname, self.time_str + "_test"))
+        self.datasets = {"val": self.eval_datasets}
 
-            self.eval_dir = os.path.join(
-                self.shell_args.log_prefix, self.shell_args.results_dirname, self.shell_args.data_subset
-            )
-            self.set_log_iter(self.start_iter)
+        self.eval_dir = os.path.join(self.shell_args.log_prefix, self.shell_args.results_dirname, self.shell_args.data_subset)
+        self.set_log_iter(self.start_iter)
 
     def set_log_iter(self, iteration):
         self.log_iter = iteration
@@ -91,10 +82,7 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
             self.eval_logger.count = iteration
 
     def evaluate_model(self):
-        # comment this codes?
-        self.envs.unwrapped.call(
-            ["switch_dataset"] * self.shell_args.num_processes, [("val",)] * self.shell_args.num_processes
-        )
+        self.envs.unwrapped.call(["switch_dataset"] * self.shell_args.num_processes, [("val",)] * self.shell_args.num_processes)
         
         # zhr: in order to be compatible
         self.eval_dir = os.path.join(self.shell_args.log_prefix, self.shell_args.results_dirname, self.shell_args.data_subset)

@@ -5,6 +5,8 @@
 # LICENSE file in the root directory of this source tree.
 
 # Much of the basic code taken from https://github.com/kevinlu1211/pytorch-decoder-resnet-50-encoder
+from matplotlib import pyplot as plt
+from PIL import Image
 from abc import ABC
 
 import numpy as np
@@ -164,6 +166,143 @@ class ResNetEncoder(BaseEncoderDecoder):
         x = self.encoder(x)
         return x, None, None
 
+#ZHR:debug-1
+class RLBase_PhaseTwo(model.NNBase):
+    def __init__( # zhr: define the layers of (GRU, ShallowVisualEncoder, visual_projection, ego_motion, motion_model, critic)
+        self,
+        encoder_type,# zhr: CNN
+        decoder_output_info,# zhr: auxiliary visual task [("reconstruction", 3), ("depth", 1), ("surface_normals", 3)]
+        recurrent=False, # zhr: default will be changge True
+        end_to_end=False,
+        hidden_size=512, # zhr: default will be changed 256
+        target_vector_size=None,
+        action_size=None,
+        gpu_ids=None,
+        create_decoder=True,
+        blind=False,
+    ):
+        assert action_size is not None
+        self.aah_im_blind = blind
+        self.end_to_end = end_to_end
+        self.action_size = action_size
+        self.target_vector_size = target_vector_size
+        self.decoder_enabled = False
+        self.decoder_outputs = None
+        self.class_pred = None
+        self.visual_encoder_features = None
+        self.visual_features = None
+
+        super(RLBase_PhaseTwo, self).__init__(
+            recurrent,
+            recurrent_input_size=hidden_size + 2 + self.action_size, #target_vector_size == 2
+            hidden_size=hidden_size,
+        ) # zhr: config GRU 
+
+        self.visual_encoder = encoder_type(decoder_output_info, create_decoder) # zhr: encoddr_type = ShallowVisualEncoder
+        self.num_output_channels = self.visual_encoder.num_output_channels # zhr: ShallowVisualEncoder output 128
+
+        self.visual_encoder = pt_util.get_data_parallel(self.visual_encoder, gpu_ids)
+
+        self.decoder_output_info = decoder_output_info# zhr: auxiliary visual task [("reconstruction", 3), ("depth", 1), ("surface_normals", 3)]
+
+        self.visual_projection = nn.Sequential(
+            ConvBlock(self.num_output_channels, hidden_size), # zhr: 128 channels -> 256 channels
+            # zhr: ConvBlock.__init__(self, in_channels, out_channels, padding=1, kernel_size=3, stride=1, with_nonlinearity=True)
+            ConvBlock(hidden_size, hidden_size), # zhr: 256 channels -> 256 channels
+            nn.AvgPool2d(2, 2), # zhr: [256,4,4]zhr_new_input
+            pt_util.RemoveDim((2, 3)), # zhr: flatten
+            nn.Linear(hidden_size * 4 * 4, hidden_size), # zhr: 256*4*4->256
+        )
+
+        self.rl_layers = nn.Sequential(
+            # nn.Linear(hidden_size + self.target_vector_size + self.action_size, hidden_size),# zhr: 256+2+3->256->256->256
+            nn.Linear(hidden_size + 2 + self.action_size, hidden_size), #ZHR:debug3
+            nn.ELU(inplace=True),
+            nn.Linear(hidden_size, hidden_size),# zhr: 256,256
+            nn.ELU(inplace=True),
+        )
+
+        self.egomotion_layer = nn.Sequential(# zhr: 512,256  256,3
+            nn.Linear(2 * hidden_size, hidden_size), nn.ELU(inplace=True), nn.Linear(hidden_size, action_size) 
+        )
+
+        self.motion_model_layer = nn.Sequential(# zhr: 259,256 256,256
+            nn.Linear(hidden_size + action_size, hidden_size), nn.ELU(inplace=True), nn.Linear(hidden_size, hidden_size) 
+        )
+
+        self.critic_linear = init(
+            nn.Linear(hidden_size, 1), nn.init.orthogonal_, lambda x: nn.init.constant_(x, 0), np.sqrt(2) # zhr: 256,1
+        )
+    @property
+    def output_size(self):
+        return self._hidden_size
+
+    def enable_decoder(self):
+        self.decoder_enabled = True
+        self.decoder_outputs = None
+
+    def disable_decoder(self):
+        self.decoder_enabled = False
+        self.decoder_outputs = None
+        pass
+
+    def forward(self, inputs, rnn_hxs, masks): 
+        target_vector = inputs.get("target_vector")
+
+        images = inputs.get("images") 
+        visual_encoder_features = inputs.get("visual_encoder_features")
+        prev_action_one_hot = inputs["prev_action_one_hot"]
+        zhr_new_input = inputs.get("zhr_new_input")
+
+        if visual_encoder_features is not None:
+            self.visual_encoder_features = visual_encoder_features 
+        else:
+            self.visual_encoder_features, self.decoder_outputs, self.class_pred = self.visual_encoder(
+                images, self.decoder_enabled
+            )
+            if not self.end_to_end:
+                self.visual_encoder_features = self.visual_encoder_features.detach()
+                # zhr: self.visual_encoder_features.data.shape      torch.Size([rollouts, 128, 8, 8])
+        self.visual_features = self.visual_projection(self.visual_encoder_features) 
+        # zhr: self.visual_features.data.shape      torch.Size([rollouts, 256])
+
+        if target_vector is not None:
+            # target_vector = torch.from_numpy(np.array([[1.0,1.1]],dtype="float32")).to("cuda:0")
+            rl_features = torch.cat((self.visual_features, target_vector, prev_action_one_hot), dim=1)
+            # # zhr: [rollouts,261] == cat([rollouts,256],[rollouts,2],[rollouts,3])
+
+        # RL Part
+        if self.is_recurrent: # zhr: True
+            rl_features, rnn_hxs = self._forward_gru(rl_features, rnn_hxs, masks)
+        if target_vector is not None:
+            x = self.rl_layers(torch.cat((rl_features, target_vector, prev_action_one_hot), dim=1))
+
+
+        return self.critic_linear(x), x, rnn_hxs
+        # zhr: rnn_hxs.shape=[1,256], whatever rollouts
+        # zhr: critic_linear(x).shape==[rollouts,1]
+        # zhr: x.shape==[rollouts,256]
+
+    def predict_egomotion(self, visual_features_curr, visual_features_prev):
+        feature_t_concat = torch.cat((visual_features_curr, visual_features_prev), dim=-1)
+        if len(feature_t_concat.shape) > 2:
+            feature_t_concat = feature_t_concat.view(-1, self.egomotion_layer[0].weight.shape[1])
+        egomotion_pred = self.egomotion_layer(feature_t_concat)
+        return egomotion_pred
+
+    def predict_next_features(self, visual_features_curr, action):
+        feature_shape = visual_features_curr.shape
+        if len(visual_features_curr.shape) > 2:
+            visual_features_curr = visual_features_curr.view(
+                -1, self.motion_model_layer[0].weight.shape[1] - self.action_size
+            )
+        if len(action.shape) > 2:
+            action = action.view(-1, self.action_size)
+        next_features_delta = self.motion_model_layer(torch.cat((visual_features_curr, action), dim=1))
+        next_features = visual_features_curr + next_features_delta
+        next_features = next_features.view(feature_shape)
+        return next_features
+
 
 class RLBaseWithVisualEncoder(model.NNBase):
     def __init__( # zhr: define the layers of (GRU, ShallowVisualEncoder, visual_projection, ego_motion, motion_model, critic)
@@ -308,13 +447,19 @@ class RLBaseWithVisualEncoder(model.NNBase):
                 self.visual_encoder_features, self.decoder_outputs, self.class_pred = self.visual_encoder(
                     images, self.decoder_enabled
                 )
-                """
-                # zhr:
-                # why self.decoder_enabled is None??
-                # self.visual_encoder_features  torch.Size([rollouts, 128, 8, 8])
-                # self.decoder_outputs          None
-                # self.class_pred               None
-                """
+
+
+                # from matplotlib import use as matplotlib_use
+                # matplotlib_use('TkAgg')
+                # plt.ion()
+                # plt.clf()
+                # zhr_rgb=np.array(images[0].cpu().numpy()).transpose(2,1,0)
+                # rgb_img = Image.fromarray(zhr_rgb, mode="RGB")
+                # plt.imshow(rgb_img)
+                # plt.show()
+                # plt.pause(0.001)
+                # plt.ioff()
+
                 if not self.end_to_end:
                     self.visual_encoder_features = self.visual_encoder_features.detach()
                     # zhr: self.visual_encoder_features.data.shape      torch.Size([rollouts, 128, 8, 8])
@@ -357,12 +502,22 @@ class RLBaseWithVisualEncoder(model.NNBase):
                 rl_features = torch.cat((self.visual_features, target_vector, prev_action_one_hot), dim=1)
                 # # zhr: [rollouts,261] == cat([rollouts,256],[rollouts,2],[rollouts,3])
             else:
-                rl_features = torch.cat((self.visual_features, prev_action_one_hot, zhr_new_input), dim=1) #ZHR:debug3
+                from base_habitat_rl_runner import ACTION_SPACE
+                if len(prev_action_one_hot[0]) == 6:
+                    prev_action_one_hot = prev_action_one_hot[:, ACTION_SPACE].to(torch.float32)
+                prev_action_one_hot = (prev_action_one_hot/(abs(self.visual_features).max()))# sacle the one_hot
+                self.visual_features = (self.visual_features/(abs(self.visual_features).max()))
+                # zhr_new_input = zhr_new_input*10
+                rl_features = torch.cat((self.visual_features, prev_action_one_hot, zhr_new_input), dim=1) 
                 # print(abs(rl_features).max())
-                rl_features = (rl_features/(abs(rl_features).max()))#ZHR:debug3
-                # rl_features = torch.cat((self.visual_features, prev_action_one_hot), dim=1)
+
+                # rl_features = torch.cat((self.visual_features, prev_action_one_hot, zhr_new_input), dim=1) #ZHR:debug3
+                # # print(abs(rl_features).max())
+                # rl_features = (rl_features/(abs(rl_features).max()))#ZHR:debug3
+                # # rl_features = torch.cat((self.visual_features, prev_action_one_hot), dim=1)
 
         # RL Part
+        # rl_features[0][229] has a large value
         if self.is_recurrent: # zhr: True
             rl_features, rnn_hxs = self._forward_gru(rl_features, rnn_hxs, masks)
             # zhr: input 259(+3) output 256. [rollouts,256],[1,256]

@@ -169,6 +169,7 @@ class FormattedRLEnv(MultiDatasetEnv, ABC):
         info["zhr_shortest_ego_start"] = self.habitat_env.sim.get_straight_shortest_path_points(self._zhr_start_position,self.habitat_env.sim.get_agent_state().position)   
         info["zhr_prev_position"] = self.zhr_prev_position
         info["zhr_accumulate_path"] = self.zhr_accumulate_path
+        info["zhr_flag_near_target"] = self.zhr_flag_near_target
 
         
         
@@ -191,7 +192,7 @@ class PointnavRLEnv(FormattedRLEnv):
         self._zhr_prev_distance = None
         self.zhr_prev_position = None
         self.zhr_accumulate_path = None
-
+        self.zhr_flag_near_target = None
 
         self._success_distance = config.TASK.SUCCESS_DISTANCE
         self._success_reward = config.TASK.SUCCESS_REWARD
@@ -210,6 +211,7 @@ class PointnavRLEnv(FormattedRLEnv):
         self._previous_target_distance = self._distance_target()
         self._delta_target_distance = 0
         self.zhr_accumulate_path = 0
+        self.zhr_flag_near_target = False
 
         
         # self._zhr_prev_distance = 0
@@ -237,8 +239,10 @@ class PointnavRLEnv(FormattedRLEnv):
 
         if not self._enable_stop_action:
             if self._distance_target() < self._success_distance:
-                # action = SimulatorActions.STOP #zhr : this will cause the agent unexpectedly reset()
                 print("+++++++++++++++++++++++++++++++++++++++++++++")
+                self.zhr_flag_near_target = True
+                # action = SimulatorActions.STOP #zhr : this will cause the agent unexpectedly reset()
+                
 
         obs, reward, done, info = super(PointnavRLEnv, self).step(action) # update self._zhr_get_distance
         return obs, reward, done, info 
