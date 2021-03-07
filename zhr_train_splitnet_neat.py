@@ -32,7 +32,7 @@ from utils.storage import RolloutStorageWithMultipleObservations
 class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
     def __init__(self, create_decoder=True):
         self.detect_msg = None # This is from yolov5
-        self.zhr_collision_flag = None
+        self.zhr_flag_prev_collision = None
         self.zhr_get_distance = None
         self.zhr_prev_action = None
 
@@ -102,11 +102,12 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
         num_updates = (int(self.shell_args.num_env_steps) // self.shell_args.num_forward_rollout_steps) // self.shell_args.num_processes
         try:
             zhr_iter_count = 0
+            zhr_episode_count = 0
+            self.zhr_flag_prev_collision = False
             self.save_checkpoint(-1, zhr_iter_count) #save the initial weights
             zhr_initial_lr = self.shell_args.lr
             for X_iter in range(num_updates):
                 zhr_iter_count += 1
-                self.zhr_collision_flag = False
                 self.zhr_get_distance = 0.0
                 self.zhr_prev_action = -1
 
@@ -146,10 +147,9 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                         # save dists from previous step or else on reset they will be overwritten
                         distances = pt_util.to_numpy(obs["goal_geodesic_distance"])
 
-                        obs, rewards, dones, infos = self.envs.step(translated_action_space)# zhr: when getting to the max-episode-length
+                        obs, _, dones, infos = self.envs.step(translated_action_space)# zhr: when getting to the max-episode-length
                         obs["zhr_new_input"] = torch.from_numpy(np.array([1.0 if infos[0]["zhr_collision_flag"] else 0.0])) #ZHR:debug3
                         
-                        self.zhr_collision_flag = infos[0]["zhr_collision_flag"]
                         self.zhr_get_distance = infos[0]["zhr_get_distance"] 
                         ### to satisify underlying codes
                         if infos[0]["zhr_prev_distance"] is None: # for the first time, the api will return None:     info["zhr_prev_distance"] = self._zhr_prev_distance
@@ -166,6 +166,7 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                         dones = [success]
                         ### zhr: boudary condition
                         if zhr_flag_next_zero:
+                            self.zhr_flag_prev_collision = False
                             zhr_flag_next_zero = False # To set zero some variables at next turn
                             self.zhr_get_distance = 0
                             infos[0]["zhr_get_distance"] = 0
@@ -177,7 +178,7 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                             print("This step will be skipped")
                             break # break the rollouts
 
-                        success_rate = num_episodes/(1e-5+zhr_iter_count)
+                        success_rate = num_episodes/(1e-5+zhr_episode_count)
                         zhr_validity_index = infos[0]['zhr_get_distance']/(1e-5+infos[0]['zhr_accumulate_path'])
                         ### zhr: design new rewards
                         penalty_time = -0.01
@@ -187,15 +188,23 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                         reward_forward = 0.03 if action_cpu[0] == 0 else 0.0
                         # reward_flee = 1.0*(infos[0]["zhr_get_distance"] - infos[0]["zhr_prev_distance"])
                         # reward_flee = np.clip(reward_flee, -0.04, 0.04)
-                        rewards = reward_success + penalty_time  + reward_forward + penalty_collision
-                        # rewards = reward_success + penalty_time  + reward_flee + penalty_collision
+                        reward_turn = 0.04 if self.zhr_flag_prev_collision and action_cpu[0] != 0 else 0.0
+                        # rewards = reward_success + penalty_time  + reward_forward + penalty_collision + reward_turn
+
+                        if self.zhr_flag_prev_collision:
+                            rewards = 0.1 if action_cpu[0] == 2 else -0.1
+                        else:
+                            rewards = 0.1 if action_cpu[0] == 0 else -0.1
+
                         rewards = torch.from_numpy(np.array(rewards, dtype='float'))
-                        print(f"Act:{action_cpu[0]}.", f"{success_rate*100:.1f}%Done:{success}.", f"iter:{zhr_iter_count+self.start_iter}.",\
-                            f"Epi_id:{infos[0]['episode_id']}. Step:{step}. Acc_R:{current_episode_rewards[0]:.5f}. Cur_R:{rewards:.5f}.",\
+                        print(f"Act:{action_cpu[0]}.", f"{success_rate*100:.1f}%Done:{success}.", f"rolls:{zhr_iter_count+self.start_iter}.",\
+                            f"Epi_id:{infos[0]['episode_id']}. Step:{step}. Epi_R:{current_episode_rewards[0]:.5f}. Cur_R:{rewards:.5f}.",\
                             f"{zhr_validity_index*100:.1f}%Acc_path{infos[0]['zhr_accumulate_path']:.5f}",\
                             f'delta_distance:{infos[0]["zhr_get_distance"] - infos[0]["zhr_prev_distance"]:.5f}',\
-                            f"Collision:{self.zhr_collision_flag}")
-     
+                            f"PrevColli:{self.zhr_flag_prev_collision}")
+
+                        self.zhr_flag_prev_collision = infos[0]["zhr_collision_flag"]
+
                         # ### zhr: Show the ego information
                         with open("/home/u/Desktop/splitnet/zhr_flag_show.json","r") as f:
                             zhr_flag_show=json.load(f)
@@ -286,9 +295,11 @@ class HabitatRLTrainAndEvalRunner(HabitatRLEvalRunner):
                     ### zhr: boundary condition -> otherwise, the agent will not stop until the last step of rollout is successful
                     if dones[0]:
                         zhr_flag_next_zero = True 
+                        zhr_episode_count += 1
                         break # wait to update weights            
                 if infos[0]["zhr_episode_over"]: #to restart the rollout step to 0
                     print("This step is now skipped")
+                    zhr_episode_count += 1
                     zhr_iter_count -= 1
                     continue # continue iter, and not update this step
                 with torch.no_grad():

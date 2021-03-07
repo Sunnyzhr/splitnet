@@ -19,7 +19,7 @@ from habitat import SimulatorActions
 from arguments import get_args
 from networks import networks
 from networks import optimizers
-from networks.networks import VisualPolicy
+from networks.networks import VisualPolicy, VisualPolicy_PhaseTwo
 from reinforcement_learning.get_config import get_dataset_config
 from reinforcement_learning.nav_rl_env import make_env_fn, PointnavRLEnv, ExplorationRLEnv, RunAwayRLEnv
 from utils.env_util import VecPyTorch, HabitatVecEnvWrapper
@@ -102,15 +102,15 @@ class BaseHabitatRLRunner(object):
 
     def restore(self):
         if self.shell_args.load_model:
-            print("\n++++++++ Now load the network of PhaseOne ++++++++"*3)
-            self.start_iter = pt_util.restore_from_folder(
-                self.agent, # VisualPolicy(.....)
-                os.path.join(self.shell_args.log_prefix, self.shell_args.checkpoint_dirname,"*"),
-                # '/home/u/Desktop/splitnet/output_files/pointnav/gibson/splitnet_pretrain_supervised_rl/   checkpoints/    *'
-                self.shell_args.saved_variable_prefix, # ''
-                self.shell_args.new_variable_prefix, # ''
-            )# zhr: start with zhr_weights
-            print("++++++++ Loaded network of PhaseOne ++++++++\n"*3)
+            # print("\n++++++++ Now load the network of PhaseOne ++++++++"*3)
+            # self.start_iter = pt_util.restore_from_folder(
+            #     self.agent, # VisualPolicy(.....)
+            #     os.path.join(self.shell_args.log_prefix, self.shell_args.checkpoint_dirname,"*"),
+            #     # '/home/u/Desktop/splitnet/output_files/pointnav/gibson/splitnet_pretrain_supervised_rl/   checkpoints/    *'
+            #     self.shell_args.saved_variable_prefix, # ''
+            #     self.shell_args.new_variable_prefix, # ''
+            # )# zhr: start with zhr_weights
+            # print("++++++++ Loaded network of PhaseOne ++++++++\n"*3)
             print("\n++++++++ Now load the network of PhaseTwo ++++++++"*3)
             # ZHR:debug-1 
             pt_util.restore_from_folder(
@@ -244,7 +244,7 @@ class BaseHabitatRLRunner(object):
         )
 
         #ZHR:debug-1
-        self.agent_PhaseTwo = VisualPolicy( # zhr: Key class
+        self.agent_PhaseTwo = VisualPolicy_PhaseTwo( # zhr: Key class
             self.gym_action_space, #<class 'gym.spaces.discrete.Discrete'> such as Discrete(3).
             base=networks.RLBase_PhaseTwo, # zhr: Key class
             base_kwargs=dict(

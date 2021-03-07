@@ -373,7 +373,7 @@ class RLBaseWithVisualEncoder(model.NNBase):
             nn.ELU(inplace=True),
             nn.Linear(2*hidden_size,hidden_size),
             nn.ELU(inplace=True),
-            nn.Linear(hidden_size,hidden_size),
+            nn.Linear(hidden_size,hidden_size - 10),#ZHR:debug5
             nn.ELU(inplace=True),
         )
 
@@ -466,38 +466,6 @@ class RLBaseWithVisualEncoder(model.NNBase):
             self.visual_features = self.visual_projection(self.visual_encoder_features) 
             # zhr: self.visual_features.data.shape      torch.Size([rollouts, 256])
 
-            """
-            ### Siamese 
-            ### zhr: get the target image
-            from torchvision import transforms
-            from PIL import Image  
-            transform1 = transforms.Compose([transforms.ToTensor()])
-            img_PIL = Image.open("/home/u/Desktop/splitnet/zhr/target_image.png").convert('RGB')
-            img_PIL_Tensor = transform1(img_PIL)
-            zhr_target_image=torch.unsqueeze(img_PIL_Tensor, 0).to("cuda:0") if (torch.cuda.is_available()) else torch.unsqueeze(img_PIL_Tensor, 0)
-            self.zhr_TargetFeatures , _ , _ = self.visual_encoder(zhr_target_image,self.decoder_enabled)# zhr: imitate the preparation of images
-            self.zhr_TargetFeatures = self.zhr_TargetFeatures.detach()
-            self.zhr_TargetFeatures = self.visual_projection(self.zhr_TargetFeatures)
-            ### beacause of the rollouts == 256
-            tmp = self.zhr_TargetFeatures
-            for i in range(self.visual_features.shape[0]-1): # (128,256)[0] == 128
-                tmp = torch.cat((tmp, self.zhr_TargetFeatures), 0) 
-            self.zhr_TargetFeatures = tmp
-            ### calculate the similarity            
-            self.zhr_similarity = torch.FloatTensor(self.visual_features.shape[0])
-            for i in range(self.visual_features.shape[0]): # (128,256)[0] == 128
-                # self.zhr_similarity[i] = torch.cosine_similarity(torch.unsqueeze(self.visual_features[i],0),torch.unsqueeze(self.zhr_TargetFeatures[i],0))
-                self.zhr_similarity[i] = torch.cosine_similarity(self.visual_features[i],self.zhr_TargetFeatures[i],dim=0)
-            print(self.zhr_similarity.shape,(self.zhr_similarity[0]-0.99)*100)
-            ### zhr_modify_structure: 256->512->FC layers->256
-            self.zhr_cat = torch.cat((self.visual_features, self.zhr_TargetFeatures), dim=1) # 512
-            self.zhr_256 = self.zhr_layers(self.zhr_cat) # 256 
-            if target_vector is not None:
-                rl_features = torch.cat((self.zhr_256, target_vector, prev_action_one_hot), dim=1)
-            else:
-                rl_features = torch.cat((self.visual_features, prev_action_one_hot), dim=1)
-            """
-
             if target_vector is not None:
                 rl_features = torch.cat((self.visual_features, target_vector, prev_action_one_hot), dim=1)
                 # # zhr: [rollouts,261] == cat([rollouts,256],[rollouts,2],[rollouts,3])
@@ -507,7 +475,6 @@ class RLBaseWithVisualEncoder(model.NNBase):
                     prev_action_one_hot = prev_action_one_hot[:, ACTION_SPACE].to(torch.float32)
                 prev_action_one_hot = (prev_action_one_hot/(abs(self.visual_features).max()))# sacle the one_hot
                 self.visual_features = (self.visual_features/(abs(self.visual_features).max()))
-                # zhr_new_input = zhr_new_input*10
                 rl_features = torch.cat((self.visual_features, prev_action_one_hot, zhr_new_input), dim=1) 
                 # print(abs(rl_features).max())
 
@@ -528,8 +495,24 @@ class RLBaseWithVisualEncoder(model.NNBase):
             # x = self.rl_layers(torch.cat((rl_features, prev_action_one_hot), dim=1))
             # x = self.rl_layers(torch.cat((rl_features, prev_action_one_hot, zhr_new_input), dim=1)) 
             x = self.rl_layers(rl_features) #ZHR:debug3
+            zhr_new_input = zhr_new_input*20
+            # x=x*0.0001 #????????????
+            x = torch.cat((x, 
+            zhr_new_input,
+            zhr_new_input,
+            zhr_new_input,
+            zhr_new_input,
+            zhr_new_input,
+            zhr_new_input,
+            zhr_new_input,
+            zhr_new_input,
+            zhr_new_input,
+            zhr_new_input), dim=1)#ZHR:debug5
 
         return self.critic_linear(x), x, rnn_hxs
+        # return self.critic_linear(x), torch.cat((x, zhr_new_input), dim=1), rnn_hxs #ZHR:debug4
+        
+        
         # zhr: rnn_hxs.shape=[1,256], whatever rollouts
         # zhr: critic_linear(x).shape==[rollouts,1]
         # zhr: x.shape==[rollouts,256]
@@ -572,10 +555,54 @@ class VisualPolicy(model.Policy):
 
     def act(self, inputs, rnn_hxs, masks, deterministic=False):
         value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
-        dist = self.dist(actor_features)
+        # dist = self.dist(actor_features)
+        """
+        This is the key change:
+        """
+        dist = self.zhr_dist(actor_features) #ZHR:debug4
         self.last_dist = dist
 
         # deterministic = True #ZHR:debug2
+        if deterministic:
+            action = dist.mode()
+        else:
+            action = dist.sample()
+
+        action_log_probs = dist.log_probs(action)
+
+        return value, action, action_log_probs, rnn_hxs
+
+    def evaluate_actions(self, inputs, rnn_hxs, masks, action):
+        value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
+        dist = self.zhr_dist(actor_features) #ZHR:debug4
+        self.last_dist = dist
+
+        action_log_probs = dist.log_probs(action)
+        dist_entropy = dist.entropy().mean()
+
+        return value, action_log_probs, dist_entropy, rnn_hxs
+
+class VisualPolicy_PhaseTwo(model.Policy):
+    def __init__(self, action_space, base, base_kwargs=None):
+        """
+        action_space is number
+        base is 
+        """
+        def base_fn(x, **kwargs):
+            return base(**kwargs)
+
+        super(VisualPolicy_PhaseTwo, self).__init__([None], action_space, base_fn, base_kwargs) # it does not work
+        self.num_actions = action_space.n # e.g. action=Discrete(3), action.n==3,type(action)==int
+        self.last_dist = None
+
+        self.agent_config = None #ZHR_debug
+
+    def act(self, inputs, rnn_hxs, masks, deterministic=False):
+        value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
+        dist = self.dist(actor_features)
+        self.last_dist = dist
+
+        # deterministic = True #ZHR:debug2,PointNav
         if deterministic:
             action = dist.mode()
         else:

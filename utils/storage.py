@@ -67,6 +67,7 @@ class RolloutStorageWithMultipleObservations(RolloutStorage):
 
     def copy_obs(self, obs, index):
         self.obs[index].copy_(obs[self.primary_obs_name])
+        # print("+++\n",self.additional_observations_dict,"+++\n")
         for key in self.additional_observations_dict:
             if key not in obs:
                 if "copy_obs" not in self._warn_once:

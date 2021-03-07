@@ -4,6 +4,8 @@
 # This source code is licensed under the Creative Commons license found in the
 # LICENSE file in the root directory of this source tree.
 import json
+import csv
+import pandas as pd
 
 import datetime
 import glob
@@ -38,8 +40,9 @@ def get_eval_dataset(shell_args, data_subset="val"):
     if shell_args.dataset == "mp3d":
         data_path = "data/datasets/pointnav/mp3d/v1/{split}/{split}.json.gz"
     elif shell_args.dataset == "gibson":
-        # data_path = "data/datasets/pointnav/gibson/v1/{split}/{split}.json.gz"
-        data_path = "data/datasets/pointnav/gibson/v1/{split}/zhr.json.gz"
+        # # data_path = "data/datasets/pointnav/gibson/v1/{split}/{split}.json.gz"
+        # data_path = "data/datasets/pointnav/gibson/v1/{split}/zhr.json.gz"
+        data_path = "data/datasets/pointnav/gibson/v1/{split}/val.json.gz"
         # Attention: both eval_.. and base_.. have data_path configuration!!!!!!!!!!!!!
     else:
         raise NotImplementedError("No rule for this dataset.")
@@ -92,9 +95,13 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
             os.makedirs(self.eval_dir)
         try:
             eval_net_file_name = sorted(
-                glob.glob(os.path.join(self.shell_args.log_prefix, self.shell_args.checkpoint_dirname, "*") + "/*.pt"),
+                glob.glob(os.path.join(self.shell_args.log_prefix, self.shell_args.checkpoint_dirname,"best_weights","*") + "/*.pt"),
                 key=os.path.getmtime,
             )[-1]
+            # eval_net_file_name = sorted(
+            #     glob.glob(os.path.join(self.shell_args.log_prefix, self.shell_args.checkpoint_dirname, "*") + "/*.pt"),
+            #     key=os.path.getmtime,
+            # )[-1]
             eval_net_file_name = (
                 self.shell_args.log_prefix.replace(os.sep, "_")
                 + "_"
@@ -106,9 +113,10 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
         eval_output_file = open(os.path.join(self.eval_dir, eval_net_file_name + ".csv"), "w")
         print("Writing results to", eval_output_file.name)
 
+
         # Save the evaled net for posterity
         if self.shell_args.save_checkpoints:
-            save_model = self.agent
+            save_model = self.agent_PhaseTwo
             pt_util.save(
                 save_model,
                 os.path.join(self.shell_args.log_prefix, self.shell_args.checkpoint_dirname, "eval_weights"),
@@ -123,7 +131,7 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
         obs["prev_action_one_hot"] = obs["prev_action_one_hot"][:, ACTION_SPACE].to(torch.float32)
         recurrent_hidden_states = torch.zeros(
             self.shell_args.num_processes,
-            self.agent.recurrent_hidden_state_size,
+            self.agent_PhaseTwo.recurrent_hidden_state_size,
             dtype=torch.float32,
             device=self.device,
         )
@@ -147,6 +155,7 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
 
         eval_stats = dict(
             episode_ids=[None for _ in range(self.shell_args.num_processes)],
+            zhr_difficulty=[None for _ in range(self.shell_args.num_processes)],
             num_episodes=np.zeros(self.shell_args.num_processes, dtype=np.int32),
             num_steps=np.zeros(self.shell_args.num_processes, dtype=np.int32),
             reward=np.zeros(self.shell_args.num_processes, dtype=np.float32),
@@ -171,11 +180,23 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
             distance_from_start=0,
         )
         eval_output_file.write("name,%s,iter,%d\n\n" % (eval_net_file_name, self.log_iter))
+        
+        # zhr_difficulty = []
+        # zhr_episode_id = []
+        # zhr_num_steps = []
+        # zhr_reward = []
+        # zhr_spl = []
+        # zhr_success = []
+        # zhr_validity = []
+        with open("/home/u/Desktop/splitnet/output_files/pointnav/gibson/splitnet_pretrain_supervised_rl/results/val/test3.csv","a+") as zhr_csvfile:
+            zhr_writer = csv.writer(zhr_csvfile)
+            zhr_writer.writerow(["zhr_difficulty","episode_id","num_steps","reward","spl","success","start_geodesic_distance","end_geodesic_distance","delta_geodesic_distance","validity"])
+
         if self.shell_args.task == "pointnav":
             eval_output_file.write(
                 (
-                    "episode_id,num_steps,reward,spl,success,start_geodesic_distance,"
-                    "end_geodesic_distance,delta_geodesic_distance\n"
+                    "zhr_difficulty,episode_id,num_steps,reward,spl,success,start_geodesic_distance,"
+                    "end_geodesic_distance,delta_geodesic_distance,validity\n"
                 )
             )
         elif self.shell_args.task == "exploration":
@@ -192,15 +213,15 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
         egomotion_pred = None
         prev_action = None
         prev_action_probs = None
-        if hasattr(self.agent.base, "enable_decoder"):
+        if hasattr(self.agent_PhaseTwo.base, "enable_decoder"):
             if self.shell_args.record_video:
-                self.agent.base.enable_decoder()
+                self.agent_PhaseTwo.base.enable_decoder()
             else:
-                self.agent.base.disable_decoder()
+                self.agent_PhaseTwo.base.disable_decoder()
         while not all_done:
             with torch.no_grad():
                 start_t = time.time()
-                value, action, action_log_prob, recurrent_hidden_states = self.agent.act(
+                value, action, action_log_prob, recurrent_hidden_states = self.agent_PhaseTwo.act(
                     {
                         "images": obs["rgb"].to(self.device),
                         "target_vector": obs["pointgoal"].to(self.device),
@@ -218,10 +239,10 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
                 if self.shell_args.record_video:
                     if self.shell_args.use_motion_loss:
                         if previous_visual_features is not None:
-                            egomotion_pred = self.agent.base.predict_egomotion(
-                                self.agent.base.visual_features, previous_visual_features
+                            egomotion_pred = self.agent_PhaseTwo.base.predict_egomotion(
+                                self.agent_PhaseTwo.base.visual_features, previous_visual_features
                             )
-                        previous_visual_features = self.agent.base.visual_features.detach()
+                        previous_visual_features = self.agent_PhaseTwo.base.visual_features.detach()
 
                     # Copy so we don't mess with obs itself
                     draw_obs = OrderedDict()
@@ -230,7 +251,7 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
                     best_next_action = draw_obs.pop("best_next_action", None)
 
                     if prev_action is not None:
-                        draw_obs["action_taken"] = pt_util.to_numpy(self.agent.last_dist.probs).copy()
+                        draw_obs["action_taken"] = pt_util.to_numpy(self.agent_PhaseTwo.last_dist.probs).copy()
                         draw_obs["action_taken"][:] = 0
                         draw_obs["action_taken"][np.arange(self.shell_args.num_processes), prev_action] = 1
                         draw_obs["action_taken_name"] = SIM_ACTION_TO_NAME[draw_obs['prev_action'].item()]
@@ -240,11 +261,11 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
                         draw_obs["action_taken_name"] = SIM_ACTION_TO_NAME[SimulatorActions.STOP]
                         draw_obs["action_prob"] = None
                     prev_action = action_cpu
-                    prev_action_probs = self.agent.last_dist.probs.detach()
-                    if hasattr(self.agent.base, "decoder_outputs") and self.agent.base.decoder_outputs is not None:
+                    prev_action_probs = self.agent_PhaseTwo.last_dist.probs.detach()
+                    if hasattr(self.agent_PhaseTwo.base, "decoder_outputs") and self.agent_PhaseTwo.base.decoder_outputs is not None:
                         min_channel = 0
-                        for key, num_channels in self.agent.base.decoder_output_info:
-                            outputs = self.agent.base.decoder_outputs[:, min_channel : min_channel + num_channels, ...]
+                        for key, num_channels in self.agent_PhaseTwo.base.decoder_output_info:
+                            outputs = self.agent_PhaseTwo.base.decoder_outputs[:, min_channel : min_channel + num_channels, ...]
                             draw_obs["output_" + key] = pt_util.to_numpy(outputs).copy()
                             min_channel += num_channels
                     draw_obs["rewards"] = eval_stats["reward"]
@@ -279,6 +300,7 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
                 start_t = time.time()
                 obs, rewards, dones, infos = self.envs.step(translated_action_space)
 
+                eval_stats["validity"] = infos[0]['zhr_get_distance']/(1e-5+infos[0]['zhr_accumulate_path'])
 
                 # # zhr # Show the ego information
                 # tmp=infos[0]["top_down_map"]["map"]
@@ -350,6 +372,7 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
                             video_frames = []
 
                         eval_stats["episode_ids"][ii] = infos[ii]["episode_id"]
+                        eval_stats["zhr_difficulty"][ii] = infos[ii]["zhr_difficulty"]
 
                         if self.shell_args.task == "pointnav":
                             print(
@@ -395,10 +418,19 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
                             progress_bar.update(1)
                             eval_stats_means["num_episodes"] += 1
                             eval_stats_means["reward"] += eval_stats["reward"][ii]
-                            if self.shell_args.task == "pointnav":
-                                eval_output_file.write(
-                                    "%s,%d,%f,%f,%d,%f,%f,%f\n"
-                                    % (
+                            # # To write new csvfile
+                            # zhr_difficulty.append(eval_stats["zhr_difficulty"][ii])
+                            # zhr_episode_id.append(eval_stats["episode_ids"][ii])
+                            # zhr_num_steps.append(eval_stats["num_steps"][ii])
+                            # zhr_reward.append(eval_stats["reward"][ii])
+                            # zhr_spl.append(eval_stats["spl"][ii])
+                            # zhr_success.append(eval_stats["success"][ii])
+                            # zhr_validity.append(eval_stats["validity"] )
+
+                            with open("/home/u/Desktop/splitnet/output_files/pointnav/gibson/splitnet_pretrain_supervised_rl/results/val/test3.csv","a+") as zhr_csvfile:
+                                zhr_writer = csv.writer(zhr_csvfile)
+                                zhr_writer.writerow([
+                                        eval_stats["zhr_difficulty"][ii],
                                         eval_stats["episode_ids"][ii],
                                         eval_stats["num_steps"][ii],
                                         eval_stats["reward"][ii],
@@ -407,7 +439,23 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
                                         eval_stats["start_geodesic_distance"][ii],
                                         eval_stats["end_geodesic_distance"][ii],
                                         eval_stats["delta_geodesic_distance"][ii],
-                                    )
+                                        eval_stats["validity"]
+                                        ])
+
+                            if self.shell_args.task == "pointnav":
+                                eval_output_file.write(
+                                    "%s,%s,%d,%f,%f,%d,%f,%f,%f,%f\n"
+                                    % (
+                                        eval_stats["episode_ids"][ii],
+                                        eval_stats["zhr_difficulty"][ii],
+                                        eval_stats["num_steps"][ii],
+                                        eval_stats["reward"][ii],
+                                        eval_stats["spl"][ii],
+                                        eval_stats["success"][ii],
+                                        eval_stats["start_geodesic_distance"][ii],
+                                        eval_stats["end_geodesic_distance"][ii],
+                                        eval_stats["delta_geodesic_distance"][ii],
+                                        eval_stats["validity"]                                    )
                                 )
                                 eval_stats_means["num_steps"] += eval_stats["num_steps"][ii]
                                 eval_stats_means["spl"] += eval_stats["spl"][ii]
@@ -443,38 +491,46 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
                         current_episode_rewards[ii] = 0
                         episode_lengths.append(current_episode_lengths[ii])
                         current_episode_lengths[ii] = 0
-                        eval_stats["start_geodesic_distance"][ii] = obs["goal_geodesic_distance"][ii]
+                        try:
+                            eval_stats["start_geodesic_distance"][ii] = obs["goal_geodesic_distance"][ii]
+                        finally:
+                            print("eval_stats['start_geodesic_distance']")
 
                 # If done then clean the history of observations.
                 masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in dones]).to(self.device)
 
                 # Reverse in order to maintain order in case of multiple.
-                to_pause.reverse()
-                for ii in to_pause:
-                    # Pause the environments that are done from the vectorenv.
-                    print("Pausing env", ii)
-                    self.envs.unwrapped.pause_at(ii)
-                    current_episode_rewards = np.concatenate(
-                        (current_episode_rewards[:ii], current_episode_rewards[ii + 1 :])
-                    )
-                    current_episode_lengths = np.concatenate(
-                        (current_episode_lengths[:ii], current_episode_lengths[ii + 1 :])
-                    )
-                    for key in eval_stats:
-                        eval_stats[key] = np.concatenate((eval_stats[key][:ii], eval_stats[key][ii + 1 :]))
-                    dataset_sizes = np.concatenate((dataset_sizes[:ii], dataset_sizes[ii + 1 :]))
+                try:
+                    to_pause.reverse()
+                    for ii in to_pause:
+                        # Pause the environments that are done from the vectorenv.
+                        print("Pausing env", ii)
+                        self.envs.unwrapped.pause_at(ii)
+                        current_episode_rewards = np.concatenate(
+                            (current_episode_rewards[:ii], current_episode_rewards[ii + 1 :])
+                        )
+                        current_episode_lengths = np.concatenate(
+                            (current_episode_lengths[:ii], current_episode_lengths[ii + 1 :])
+                        )
+                        for key in eval_stats:
+                            try:
+                                eval_stats[key] = np.concatenate((eval_stats[key][:ii], eval_stats[key][ii + 1 :]))
+                            finally:
+                                pass
+                        dataset_sizes = np.concatenate((dataset_sizes[:ii], dataset_sizes[ii + 1 :]))
 
-                    for key in obs:
-                        if type(obs[key]) == torch.Tensor:
-                            obs[key] = torch.cat((obs[key][:ii], obs[key][ii + 1 :]), dim=0)
-                        else:
-                            obs[key] = np.concatenate((obs[key][:ii], obs[key][ii + 1 :]), axis=0)
+                        for key in obs:
+                            if type(obs[key]) == torch.Tensor:
+                                obs[key] = torch.cat((obs[key][:ii], obs[key][ii + 1 :]), dim=0)
+                            else:
+                                obs[key] = np.concatenate((obs[key][:ii], obs[key][ii + 1 :]), axis=0)
 
-                    recurrent_hidden_states = torch.cat(
-                        (recurrent_hidden_states[:ii], recurrent_hidden_states[ii + 1 :]), dim=0
-                    )
-                    masks = torch.cat((masks[:ii], masks[ii + 1 :]), dim=0)
-
+                        recurrent_hidden_states = torch.cat(
+                            (recurrent_hidden_states[:ii], recurrent_hidden_states[ii + 1 :]), dim=0
+                        )
+                        masks = torch.cat((masks[:ii], masks[ii + 1 :]), dim=0)
+                finally:
+                    pass
                 if len(dataset_sizes) == 0:
                     progress_bar.close()
                     all_done = True
@@ -535,6 +591,9 @@ class HabitatRLEvalRunner(BaseHabitatRLRunner):
             iter_count += 1
         print("Finished testing")
         print("Wrote results to", eval_output_file.name)
+        # dataframe = pd.DataFrame({'zhr_difficulty':zhr_difficulty,'zhr_episode_id':zhr_episode_id,"zhr_num_steps":zhr_num_steps,
+        # "zhr_reward":zhr_reward,"zhr_spl":zhr_spl,"zhr_success":zhr_success,"zhr_validity":zhr_validity})
+        # dataframe.to_csv("/home/u/Desktop/splitnet/output_files/pointnav/gibson/splitnet_pretrain_supervised_rl/results/val/test2.csv",index=False,sep=',')
 
         eval_stats_means = {key: val / eval_stats_means["num_episodes"] for key, val in eval_stats_means.items()}
         if self.shell_args.tensorboard:

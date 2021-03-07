@@ -130,11 +130,13 @@ class FormattedRLEnv(MultiDatasetEnv, ABC):
             self.habitat_env.sim.get_agent_state().rotation,
         )
 
+        self.zhr_collision_flag = False
         if self._previous_action == SimulatorActions.MOVE_FORWARD:
             if np.linalg.norm(self._current_pose[0] - self._previous_pose[0]) < self._step_size * 0.25:
                 # Collided with something
                 reward += self._collision_reward
                 self.zhr_collision_flag = True
+                
         return reward
 
     def format_observations(self, obs, done=False):
@@ -154,6 +156,7 @@ class FormattedRLEnv(MultiDatasetEnv, ABC):
 
     def get_info(self, observations):
         info = super(FormattedRLEnv, self).get_info(observations)
+        info["zhr_difficulty"] = self.habitat_env.episodes[self.habitat_env._current_episode_index].info["difficulty"]
         info["episode_id"] = self.habitat_env.episodes[self.habitat_env._current_episode_index].episode_id
         info["scene_id"] = self.habitat_env.episodes[self.habitat_env._current_episode_index].scene_id
         info["zhr_ego_position"] = self.habitat_env.sim.get_agent_state().position
@@ -235,16 +238,16 @@ class PointnavRLEnv(FormattedRLEnv):
         self._zhr_prev_distance = self._zhr_get_distance
         # self._zhr_get_distance should be update after observation
         # self._zhr_get_distance = self.habitat_env.sim.geodesic_distance(self.habitat_env.sim.get_agent_state().position, self._zhr_start_position)
-        self.zhr_collision_flag = False
 
         if not self._enable_stop_action:
             if self._distance_target() < self._success_distance:
                 print("+++++++++++++++++++++++++++++++++++++++++++++")
                 self.zhr_flag_near_target = True
-                # action = SimulatorActions.STOP #zhr : this will cause the agent unexpectedly reset()
+                action = SimulatorActions.STOP #zhr : this will cause the agent unexpectedly reset()
                 
 
         obs, reward, done, info = super(PointnavRLEnv, self).step(action) # update self._zhr_get_distance
+        # self.zhr_collision_flag = False # Cannot set False here!
         return obs, reward, done, info 
     def zhr_step_final(self):
         current_position = self.habitat_env.sim.get_agent_state().position

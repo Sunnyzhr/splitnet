@@ -6,8 +6,7 @@
 *.png
 *.mp4
 *logs*
-data
 *idea
 src
 *output_files*
-*downloaded_data
+

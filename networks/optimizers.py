@@ -326,7 +326,7 @@ class VisualPPO(Optimizer):
                     action_loss_epoch += action_loss.item() 
                     dist_entropy_epoch += dist_entropy.item()
                     loss_total_epoch += loss_total.item()
-                print(zhr_cnt)
+                print(zhr_cnt,"/home/u/Desktop/splitnet/networks/optimizers.py")
         num_updates = self.ppo_epoch * self.num_mini_batch
 
         if decoder_enabled:
